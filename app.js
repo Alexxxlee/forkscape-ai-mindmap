@@ -146,6 +146,7 @@ function createSession(tree = createInitialTree()) {
   return {
     id: makeId(),
     title: titleFromTree(tree),
+    isTitleCustom: false,
     createdAt: now,
     updatedAt: now,
     tree,
@@ -182,7 +183,7 @@ function updateActiveSession() {
     state.activeSessionId = session.id;
   }
   session.tree = state.tree;
-  session.title = titleFromTree(state.tree);
+  if (!session.isTitleCustom) session.title = titleFromTree(state.tree);
   session.updatedAt = Date.now();
 }
 
@@ -201,8 +202,9 @@ function loadTree() {
   return createInitialTree();
 }
 
-function persist() {
-  updateActiveSession();
+function persist(shouldUpdateActiveSession = true) {
+  if (shouldUpdateActiveSession) updateActiveSession();
+  sortSessionsByUpdate();
   setStored(STORAGE_KEY, JSON.stringify(state.tree));
   setStored(ACTIVE_SESSION_STORAGE, state.activeSessionId);
   setStored(SESSIONS_STORAGE, JSON.stringify({ activeSessionId: state.activeSessionId, sessions: state.sessions }));
@@ -238,18 +240,93 @@ function renderHistory() {
     return;
   }
 
-  const sorted = [...state.sessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  sorted.forEach((session) => {
-    const item = document.createElement("button");
+  sortSessionsByUpdate();
+  state.sessions.forEach((session) => {
+    const item = document.createElement("div");
     item.className = `history-item${session.id === state.activeSessionId ? " active" : ""}`;
-    item.type = "button";
+    item.role = "button";
+    item.tabIndex = 0;
     item.innerHTML = `
       <span class="history-item-title">${escapeHTML(session.title || "新的对话")}</span>
       <span class="history-item-meta">${formatTime(session.updatedAt)} · ${countNodes(session.tree)} 节点</span>
     `;
-    item.addEventListener("click", () => activateSession(session.id));
+    const main = document.createElement("span");
+    main.className = "history-item-main";
+    while (item.firstChild) main.appendChild(item.firstChild);
+    item.appendChild(main);
+    const actions = document.createElement("span");
+    actions.className = "history-item-actions";
+    actions.setAttribute("aria-label", "会话操作");
+    actions.innerHTML = `
+      <button class="history-action" type="button" data-action="rename" title="重命名会话" aria-label="重命名会话">✎</button>
+      <button class="history-action danger" type="button" data-action="delete" title="删除会话" aria-label="删除会话">×</button>
+    `;
+    item.appendChild(actions);
+    item.addEventListener("click", (event) => {
+      const actionTarget = event.target instanceof Element ? event.target.closest("[data-action]") : null;
+      const action = actionTarget?.dataset.action;
+      if (action === "rename") {
+        renameSession(session.id);
+        return;
+      }
+      if (action === "delete") {
+        deleteSession(session.id);
+        return;
+      }
+      activateSession(session.id);
+    });
+    item.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      activateSession(session.id);
+    });
     els.historyList.appendChild(item);
   });
+}
+
+function renameSession(sessionId) {
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  const nextTitle = prompt("重命名这个会话", session.title || titleFromTree(session.tree));
+  if (nextTitle === null) return;
+  const cleanTitle = nextTitle.trim();
+  if (!cleanTitle) {
+    setStatus("会话名称没有修改。");
+    return;
+  }
+  session.title = truncate(cleanTitle, 48);
+  session.isTitleCustom = true;
+  session.updatedAt = Date.now();
+  persist(false);
+  renderHistory();
+  setStatus("会话已重命名。");
+}
+
+function deleteSession(sessionId) {
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  if (!confirm(`删除“${session.title || "这个会话"}”？`)) return;
+
+  state.sessions = state.sessions.filter((item) => item.id !== sessionId);
+  if (!state.sessions.length) {
+    const replacement = createSession();
+    state.sessions = [replacement];
+    state.activeSessionId = replacement.id;
+    state.tree = replacement.tree;
+  } else if (state.activeSessionId === sessionId) {
+    sortSessionsByUpdate();
+    const nextSession = state.sessions[0];
+    state.activeSessionId = nextSession.id;
+    state.tree = nextSession.tree || createInitialTree();
+  }
+  state.selectedId = state.tree.id;
+  persist(false);
+  render();
+  setStatus("会话已删除。");
+}
+
+function sortSessionsByUpdate() {
+  state.sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
 function toggleHistoryPanel() {
