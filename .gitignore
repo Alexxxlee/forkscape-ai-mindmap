@@ -1,0 +1,5 @@
+.gemini-branch-sessions.json
+server.log
+server.err
+node_modules/
+.env
