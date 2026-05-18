@@ -2,6 +2,10 @@
 
 Forkscape is a branching canvas for AI conversations. It turns a Gemini chat into a mind-map-like workspace where every answer can be forked, explored, dragged, and saved as part of your thinking history.
 
+## Background
+
+I am a hobbyist beginner, and I built Forkscape around my own everyday needs. It is a small personal project made to make AI conversations easier for me to explore, branch, and revisit.
+
 ## Features
 
 - Branch from any AI answer instead of continuing in one linear chat.
