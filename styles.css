@@ -110,11 +110,6 @@ button,
 }
 
 .history-item {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
   width: 100%;
   padding: 10px;
   border: 1px solid rgba(255, 250, 240, .18);
@@ -122,11 +117,6 @@ button,
   color: #fffaf0;
   background: rgba(255, 250, 240, .07);
   text-align: left;
-}
-
-.history-item:focus-visible {
-  outline: 2px solid var(--gold);
-  outline-offset: 2px;
 }
 
 .history-item.active {
@@ -140,41 +130,6 @@ button,
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.history-item-actions {
-  display: flex;
-  gap: 4px;
-  opacity: .32;
-  transition: opacity .15s ease;
-}
-
-.history-item:hover .history-item-actions,
-.history-item:focus-within .history-item-actions {
-  opacity: 1;
-}
-
-.history-action {
-  display: inline-grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  border: 1px solid rgba(255, 250, 240, .2);
-  border-radius: 6px;
-  color: #fffaf0;
-  background: rgba(255, 250, 240, .08);
-  line-height: 1;
-}
-
-.history-action:hover {
-  border-color: rgba(255, 250, 240, .58);
-  background: rgba(255, 250, 240, .16);
-}
-
-.history-action.danger:hover {
-  border-color: rgba(255, 168, 154, .78);
-  color: #ffd4cc;
-  background: rgba(185, 64, 53, .28);
 }
 
 .history-item-meta {
