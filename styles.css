@@ -110,6 +110,10 @@ button,
 }
 
 .history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 10px;
   border: 1px solid rgba(255, 250, 240, .18);
@@ -129,6 +133,45 @@ button,
   opacity: .46;
   border-color: rgba(216, 169, 45, .76);
   background: rgba(216, 169, 45, .12);
+}
+
+.history-item-actions {
+  display: flex;
+  gap: 4px;
+  opacity: .28;
+  transition: opacity .16s ease;
+}
+
+.history-item:hover .history-item-actions,
+.history-item:focus-within .history-item-actions {
+  opacity: 1;
+}
+
+.history-action {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid rgba(255, 250, 240, .18);
+  border-radius: 6px;
+  color: #fffaf0;
+  background: rgba(255, 250, 240, .06);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.history-action:hover,
+.history-action:focus-visible {
+  border-color: rgba(255, 250, 240, .55);
+  background: rgba(255, 250, 240, .15);
+  outline: 0;
+}
+
+.history-action.danger:hover,
+.history-action.danger:focus-visible {
+  border-color: rgba(255, 168, 154, .78);
+  color: #ffd4cc;
+  background: rgba(185, 64, 53, .28);
 }
 
 .history-item-title {

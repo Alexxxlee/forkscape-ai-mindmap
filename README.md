@@ -2,6 +2,8 @@
 
 Forkscape is a branching canvas for AI conversations. It turns a Gemini chat into a mind-map-like workspace where every answer can be forked, explored, dragged, and saved as part of your thinking history.
 
+Current version: `v0.2.0`
+
 ## Background
 
 I am a hobbyist beginner, and I built Forkscape around my own everyday needs. It is a small personal project made to make AI conversations easier for me to explore, branch, and revisit.
@@ -12,9 +14,24 @@ I am a hobbyist beginner, and I built Forkscape around my own everyday needs. It
 - Visual mind-map canvas with draggable nodes and connection lines.
 - Mouse wheel zoom, left/middle-button canvas panning, and draggable conversation cards.
 - Auto-growing cards for longer answers.
+- Long answers can collapse, expand on hover, and pin open with a double click.
 - Persistent local conversation history via the bundled local server.
+- History sessions can be manually reordered, renamed, and deleted.
+- Large canvas navigation with a minimap and hidden scrollbars.
 - Gemini model discovery that only shows models supporting `generateContent`.
 - JSON import/export for backing up conversation trees.
+
+## Latest Update
+
+`v0.2.0` improves Forkscape as a daily-use canvas:
+
+- Added a large canvas with minimap navigation.
+- Added collapsible answer cards with hover preview and double-click pinning.
+- Added manual history ordering, session rename, and session delete.
+- Added small operation hints on the canvas.
+- Kept API keys and local session data out of Git.
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Quick Start
 

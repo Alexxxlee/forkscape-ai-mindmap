@@ -164,6 +164,7 @@ function createSession(tree = createInitialTree()) {
   return {
     id: makeId(),
     title: titleFromTree(tree),
+    isTitleCustom: false,
     createdAt: now,
     updatedAt: now,
     tree,
@@ -203,7 +204,7 @@ function updateActiveSession() {
     state.activeSessionId = session.id;
   }
   session.tree = state.tree;
-  session.title = titleFromTree(state.tree);
+  if (!session.isTitleCustom) session.title = titleFromTree(state.tree);
   session.updatedAt = Date.now();
 }
 
@@ -273,7 +274,37 @@ function renderHistory() {
       <span class="history-item-title">${escapeHTML(session.title || "新的对话")}</span>
       <span class="history-item-meta">${formatTime(session.updatedAt)} · ${countNodes(session.tree)} 节点</span>
     `;
-    item.addEventListener("click", () => activateSession(session.id));
+    const main = document.createElement("span");
+    main.className = "history-item-main";
+    while (item.firstChild) main.appendChild(item.firstChild);
+    item.appendChild(main);
+    const actions = document.createElement("span");
+    actions.className = "history-item-actions";
+    actions.setAttribute("aria-label", "会话操作");
+    actions.innerHTML = `
+      <span class="history-action" role="button" tabindex="0" data-action="rename" title="重命名会话" aria-label="重命名会话">✎</span>
+      <span class="history-action danger" role="button" tabindex="0" data-action="delete" title="删除会话" aria-label="删除会话">×</span>
+    `;
+    item.appendChild(actions);
+    item.addEventListener("click", (event) => {
+      const action = getHistoryAction(event.target);
+      if (action === "rename") {
+        renameSession(session.id);
+        return;
+      }
+      if (action === "delete") {
+        deleteSession(session.id);
+        return;
+      }
+      activateSession(session.id);
+    });
+    item.addEventListener("keydown", (event) => {
+      const action = getHistoryAction(event.target);
+      if (!action || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      if (action === "rename") renameSession(session.id);
+      if (action === "delete") deleteSession(session.id);
+    });
     item.addEventListener("dragstart", (event) => startHistoryDrag(event, session.id));
     item.addEventListener("dragover", (event) => dragOverHistory(event, session.id));
     item.addEventListener("drop", (event) => dropHistorySession(event, session.id));
@@ -282,7 +313,58 @@ function renderHistory() {
   });
 }
 
+function getHistoryAction(target) {
+  if (!(target instanceof Element)) return "";
+  return target.closest("[data-action]")?.dataset.action || "";
+}
+
+function renameSession(sessionId) {
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  const nextTitle = prompt("重命名这个会话", session.title || titleFromTree(session.tree));
+  if (nextTitle === null) return;
+  const cleanTitle = nextTitle.trim();
+  if (!cleanTitle) {
+    setStatus("会话名称没有修改。");
+    return;
+  }
+  session.title = truncate(cleanTitle, 48);
+  session.isTitleCustom = true;
+  session.updatedAt = Date.now();
+  persist(false);
+  renderHistory();
+  setStatus("会话已重命名。");
+}
+
+function deleteSession(sessionId) {
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  if (!confirm(`删除“${session.title || "这个会话"}”？`)) return;
+
+  state.sessions = state.sessions.filter((item) => item.id !== sessionId);
+  if (!state.sessions.length) {
+    const replacement = createSession();
+    state.sessions = [replacement];
+    state.activeSessionId = replacement.id;
+    state.tree = replacement.tree;
+  } else if (state.activeSessionId === sessionId) {
+    const nextSession = state.sessions[0];
+    state.activeSessionId = nextSession.id;
+    state.tree = nextSession.tree || createInitialTree();
+    shiftLegacyNodePositions(state.tree);
+  }
+  state.selectedId = state.tree.id;
+  state.hasPositionedViewport = false;
+  persist(false);
+  render();
+  setStatus("会话已删除。");
+}
+
 function startHistoryDrag(event, sessionId) {
+  if (getHistoryAction(event.target)) {
+    event.preventDefault();
+    return;
+  }
   state.dragHistorySessionId = sessionId;
   event.dataTransfer.effectAllowed = "move";
   event.dataTransfer.setData("text/plain", sessionId);
