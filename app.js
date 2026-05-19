@@ -5,6 +5,12 @@ const KEY_STORAGE = "gemini-branch-mindmap:api-key";
 const MODEL_STORAGE = "gemini-branch-mindmap:model";
 const DEFAULT_API_KEY = "";
 const FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+const NODE_MIN_HEIGHT = 110;
+const NODE_COLLAPSED_HEIGHT = NODE_MIN_HEIGHT * 2;
+const ANSWER_COLLAPSE_DELAY = 5000;
+const CANVAS_SIZE = 24000;
+const CANVAS_ORIGIN_X = 11200;
+const CANVAS_ORIGIN_Y = 10800;
 
 const state = {
   selectedId: "root",
@@ -18,6 +24,12 @@ const state = {
   isNodeDragging: false,
   suppressNextClick: false,
   positioned: [],
+  collapsedNodeIds: new Set(),
+  pinnedNodeIds: new Set(),
+  collapseTimers: new Map(),
+  clickSelectTimer: 0,
+  hasPositionedViewport: false,
+  minimapBounds: null,
 };
 
 const els = {
@@ -29,6 +41,9 @@ const els = {
   mindmap: document.querySelector("#mindmap"),
   viewport: document.querySelector("#mindmapViewport"),
   linkLayer: document.querySelector("#linkLayer"),
+  minimap: document.querySelector("#canvasMinimap"),
+  minimapNodes: document.querySelector("#minimapNodes"),
+  minimapViewport: document.querySelector("#minimapViewport"),
   template: document.querySelector("#nodeTemplate"),
   selectedType: document.querySelector("#selectedType"),
   selectedTitle: document.querySelector("#selectedTitle"),
@@ -85,12 +100,14 @@ function bindEvents() {
   els.zoomOut.addEventListener("click", () => setZoom(state.zoom - 0.08));
   els.resetView.addEventListener("click", resetView);
   els.viewport.addEventListener("mousedown", startPan);
+  els.viewport.addEventListener("scroll", renderMinimapViewport, { passive: true });
   els.viewport.addEventListener("wheel", handleWheelZoom, { passive: false });
   els.viewport.addEventListener("auxclick", (event) => {
     if (event.button === 1) event.preventDefault();
   });
   window.addEventListener("mousemove", handlePointerMove);
   window.addEventListener("mouseup", handlePointerUp);
+  els.minimap.addEventListener("mousedown", jumpToMinimapPoint);
   els.promptInput.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
       handleAsk();
@@ -139,6 +156,7 @@ async function loadSessionStore() {
   const active = state.sessions.find((session) => session.id === state.activeSessionId) || state.sessions[0];
   state.activeSessionId = active.id;
   state.tree = active.tree || createInitialTree();
+  shiftLegacyNodePositions(state.tree);
 }
 
 function createSession(tree = createInitialTree()) {
@@ -154,11 +172,12 @@ function createSession(tree = createInitialTree()) {
 
 function createNewSession() {
   const session = createSession();
-  state.sessions.unshift(session);
+  state.sessions.push(session);
   state.activeSessionId = session.id;
   state.tree = session.tree;
   state.selectedId = state.tree.id;
   state.zoom = 1;
+  state.hasPositionedViewport = false;
   persist();
   render();
   setStatus("已创建新的历史会话。");
@@ -169,7 +188,9 @@ function activateSession(sessionId) {
   if (!session) return;
   state.activeSessionId = session.id;
   state.tree = session.tree || createInitialTree();
+  shiftLegacyNodePositions(state.tree);
   state.selectedId = state.tree.id;
+  state.hasPositionedViewport = false;
   persist(false);
   render();
 }
@@ -201,8 +222,8 @@ function loadTree() {
   return createInitialTree();
 }
 
-function persist() {
-  updateActiveSession();
+function persist(shouldUpdateActiveSession = true) {
+  if (shouldUpdateActiveSession) updateActiveSession();
   setStored(STORAGE_KEY, JSON.stringify(state.tree));
   setStored(ACTIVE_SESSION_STORAGE, state.activeSessionId);
   setStored(SESSIONS_STORAGE, JSON.stringify({ activeSessionId: state.activeSessionId, sessions: state.sessions }));
@@ -218,13 +239,16 @@ function saveSessionStore() {
 }
 
 function render() {
+  prepareCollapsedAnswers(state.tree);
   const positioned = layoutTree(state.tree);
   state.positioned = positioned;
   renderNodes(positioned);
   renderLinks(positioned);
+  renderMinimap(positioned);
   renderSelection();
   renderHistory();
   updateMockButton();
+  ensureViewportPosition();
 }
 
 function renderHistory() {
@@ -238,17 +262,98 @@ function renderHistory() {
     return;
   }
 
-  const sorted = [...state.sessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  sorted.forEach((session) => {
+  state.sessions.forEach((session) => {
     const item = document.createElement("button");
     item.className = `history-item${session.id === state.activeSessionId ? " active" : ""}`;
+    if (session.id === state.dragHistorySessionId) item.classList.add("dragging");
     item.type = "button";
+    item.draggable = true;
+    item.dataset.sessionId = session.id;
     item.innerHTML = `
       <span class="history-item-title">${escapeHTML(session.title || "新的对话")}</span>
       <span class="history-item-meta">${formatTime(session.updatedAt)} · ${countNodes(session.tree)} 节点</span>
     `;
     item.addEventListener("click", () => activateSession(session.id));
+    item.addEventListener("dragstart", (event) => startHistoryDrag(event, session.id));
+    item.addEventListener("dragover", (event) => dragOverHistory(event, session.id));
+    item.addEventListener("drop", (event) => dropHistorySession(event, session.id));
+    item.addEventListener("dragend", clearHistoryDragState);
     els.historyList.appendChild(item);
+  });
+}
+
+function startHistoryDrag(event, sessionId) {
+  state.dragHistorySessionId = sessionId;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", sessionId);
+  event.currentTarget.classList.add("dragging");
+}
+
+function dragOverHistory(event, sessionId) {
+  if (!state.dragHistorySessionId || state.dragHistorySessionId === sessionId) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+  moveHistorySessionDuringDrag(event, sessionId);
+}
+
+function dropHistorySession(event, targetSessionId) {
+  event.preventDefault();
+  const sourceSessionId = state.dragHistorySessionId || event.dataTransfer.getData("text/plain");
+  if (sourceSessionId && sourceSessionId !== targetSessionId) moveHistorySessionDuringDrag(event, targetSessionId);
+  clearHistoryDragState();
+  persist(false);
+  renderHistory();
+  setStatus("历史顺序已更新。");
+}
+
+function moveHistorySessionDuringDrag(event, targetSessionId) {
+  const sourceSessionId = state.dragHistorySessionId;
+  const sourceIndex = state.sessions.findIndex((session) => session.id === sourceSessionId);
+  const targetIndex = state.sessions.findIndex((session) => session.id === targetSessionId);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const shouldPlaceAfter = event.clientY > rect.top + rect.height / 2;
+  const beforeRects = getHistoryItemRects();
+  const [movedSession] = state.sessions.splice(sourceIndex, 1);
+  const nextTargetIndex = state.sessions.findIndex((session) => session.id === targetSessionId);
+  const insertIndex = nextTargetIndex + (shouldPlaceAfter ? 1 : 0);
+  if (sourceIndex === insertIndex) {
+    state.sessions.splice(sourceIndex, 0, movedSession);
+    return;
+  }
+  state.sessions.splice(insertIndex, 0, movedSession);
+  renderHistory();
+  animateHistoryReorder(beforeRects);
+}
+
+function clearHistoryDragState() {
+  state.dragHistorySessionId = "";
+  els.historyList.querySelectorAll(".history-item").forEach((item) => {
+    item.classList.remove("dragging");
+  });
+}
+
+function getHistoryItemRects() {
+  return new Map([...els.historyList.querySelectorAll(".history-item")].map((item) => [
+    item.dataset.sessionId,
+    item.getBoundingClientRect(),
+  ]));
+}
+
+function animateHistoryReorder(beforeRects) {
+  els.historyList.querySelectorAll(".history-item").forEach((item) => {
+    const before = beforeRects.get(item.dataset.sessionId);
+    if (!before) return;
+    const after = item.getBoundingClientRect();
+    const dy = before.top - after.top;
+    if (!dy) return;
+    item.animate([
+      { transform: `translateY(${dy}px)` },
+      { transform: "translateY(0)" },
+    ], {
+      duration: 180,
+      easing: "cubic-bezier(.2, .8, .2, 1)",
+    });
   });
 }
 
@@ -267,18 +372,16 @@ function layoutTree(root) {
   measure(root, 0, null);
   place(root, 0, topInset);
 
-  const maxX = Math.max(...all.map((entry) => entry.x)) + 420;
-  const maxY = Math.max(520, ...all.map((entry) => entry.y + entry.height)) + 220;
-  els.mindmap.style.width = `${maxX}px`;
-  els.mindmap.style.height = `${maxY}px`;
-  els.linkLayer.setAttribute("width", maxX);
-  els.linkLayer.setAttribute("height", maxY);
-  els.linkLayer.style.width = `${maxX}px`;
-  els.linkLayer.style.height = `${maxY}px`;
+  els.mindmap.style.width = `${CANVAS_SIZE}px`;
+  els.mindmap.style.height = `${CANVAS_SIZE}px`;
+  els.linkLayer.setAttribute("width", CANVAS_SIZE);
+  els.linkLayer.setAttribute("height", CANVAS_SIZE);
+  els.linkLayer.style.width = `${CANVAS_SIZE}px`;
+  els.linkLayer.style.height = `${CANVAS_SIZE}px`;
   return all;
 
   function measure(node, depth, parentId) {
-    const height = estimateNodeHeight(node.text);
+    const height = getNodeDisplayHeight(node);
     const entry = { node, depth, parentId, x: 0, y: 0, height, subtreeHeight: height };
     all.push(entry);
     const childHeights = node.children.map((child) => measure(child, depth + 1, node.id));
@@ -290,8 +393,8 @@ function layoutTree(root) {
 
   function place(node, depth, top) {
     const entry = all.find((item) => item.node.id === node.id);
-    const baseX = depth * (nodeWidth + levelGap);
-    const baseY = top + (entry.subtreeHeight - entry.height) / 2;
+    const baseX = CANVAS_ORIGIN_X + depth * (nodeWidth + levelGap);
+    const baseY = CANVAS_ORIGIN_Y + top + (entry.subtreeHeight - entry.height) / 2;
     entry.x = Number.isFinite(node.x) ? node.x : baseX;
     entry.y = Number.isFinite(node.y) ? node.y : baseY;
 
@@ -309,24 +412,44 @@ function renderNodes(positioned) {
   positioned.forEach(({ node, x, y }) => {
     const fragment = els.template.content.cloneNode(true);
     const card = fragment.querySelector(".node-card");
+    const fullHeight = estimateNodeHeight(node.text);
+    const displayHeight = getNodeDisplayHeight(node);
+    const isCollapsed = isNodeCollapsed(node);
     card.classList.add(node.role);
     if (node.id === state.selectedId) card.classList.add("selected");
+    if (isCollapsed) card.classList.add("collapsed");
     if (node.loading) card.classList.add("loading");
     card.dataset.id = node.id;
     card.style.left = `${x}px`;
     card.style.top = `${y}px`;
-    card.style.minHeight = `${Math.max(110, Math.round(estimateNodeHeight(node.text)))}px`;
+    card.style.setProperty("--node-full-height", `${Math.round(fullHeight)}px`);
+    card.style.setProperty("--node-display-height", `${Math.round(displayHeight)}px`);
     card.querySelector(".node-role").textContent = roleLabel(node.role);
     card.querySelector(".node-count").textContent = `${node.children.length} 分支`;
     card.querySelector(".node-text").textContent = node.text;
     card.addEventListener("mousedown", (event) => startNodeDrag(event, node, card));
-    card.addEventListener("click", () => {
+    card.addEventListener("click", (event) => {
       if (state.suppressNextClick) {
         state.suppressNextClick = false;
         return;
       }
-      state.selectedId = node.id;
-      render();
+      if (event.detail >= 2) {
+        cancelPendingSelection();
+        toggleNodePinned(node.id);
+        state.selectedId = node.id;
+        render();
+        return;
+      }
+      if (state.clickSelectTimer) clearTimeout(state.clickSelectTimer);
+      state.clickSelectTimer = setTimeout(() => {
+        state.clickSelectTimer = 0;
+        state.selectedId = node.id;
+        render();
+      }, 320);
+    });
+    card.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      cancelPendingSelection();
     });
     els.mindmap.appendChild(fragment);
   });
@@ -349,6 +472,76 @@ function renderLinks(positioned) {
     path.setAttribute("d", `M ${startX} ${startY} C ${mid} ${startY}, ${mid} ${endY}, ${endX} ${endY}`);
     els.linkLayer.appendChild(path);
   });
+}
+
+function renderMinimap(positioned) {
+  state.minimapBounds = getMinimapBounds(positioned);
+  const fragment = document.createDocumentFragment();
+  positioned.forEach((entry) => {
+    const block = document.createElement("span");
+    block.className = `minimap-node ${entry.node.role}${entry.node.id === state.selectedId ? " selected" : ""}`;
+    const topLeft = toMinimapPercent(entry.x, entry.y);
+    const bottomRight = toMinimapPercent(entry.x + 252, entry.y + entry.height);
+    block.style.left = `${topLeft.x}%`;
+    block.style.top = `${topLeft.y}%`;
+    block.style.width = `${clamp(bottomRight.x - topLeft.x, 3, 100)}%`;
+    block.style.height = `${clamp(bottomRight.y - topLeft.y, 3, 100)}%`;
+    fragment.appendChild(block);
+  });
+  els.minimapNodes.replaceChildren(fragment);
+  renderMinimapViewport();
+}
+
+function renderMinimapViewport() {
+  if (!els.minimapViewport || !state.minimapBounds) return;
+  const viewportLeft = els.viewport.scrollLeft / state.zoom;
+  const viewportTop = els.viewport.scrollTop / state.zoom;
+  const topLeft = toMinimapPercent(viewportLeft, viewportTop);
+  const bottomRight = toMinimapPercent(
+    viewportLeft + els.viewport.clientWidth / state.zoom,
+    viewportTop + els.viewport.clientHeight / state.zoom,
+  );
+  const left = clamp(Math.min(topLeft.x, bottomRight.x), 0, 100);
+  const top = clamp(Math.min(topLeft.y, bottomRight.y), 0, 100);
+  const width = clamp(Math.abs(bottomRight.x - topLeft.x), 4, 100 - left);
+  const height = clamp(Math.abs(bottomRight.y - topLeft.y), 4, 100 - top);
+  els.minimapViewport.style.left = `${left}%`;
+  els.minimapViewport.style.top = `${top}%`;
+  els.minimapViewport.style.width = `${width}%`;
+  els.minimapViewport.style.height = `${height}%`;
+}
+
+function getMinimapBounds(positioned) {
+  if (!positioned.length) {
+    return { minX: CANVAS_ORIGIN_X - 400, minY: CANVAS_ORIGIN_Y - 400, width: 800, height: 800 };
+  }
+  const padding = 220;
+  const minX = Math.min(...positioned.map((entry) => entry.x)) - padding;
+  const minY = Math.min(...positioned.map((entry) => entry.y)) - padding;
+  const maxX = Math.max(...positioned.map((entry) => entry.x + 252)) + padding;
+  const maxY = Math.max(...positioned.map((entry) => entry.y + entry.height)) + padding;
+  return {
+    minX,
+    minY,
+    width: Math.max(640, maxX - minX),
+    height: Math.max(640, maxY - minY),
+  };
+}
+
+function toMinimapPercent(canvasX, canvasY) {
+  const bounds = state.minimapBounds || getMinimapBounds(state.positioned);
+  return {
+    x: clamp(((canvasX - bounds.minX) / bounds.width) * 100, 0, 100),
+    y: clamp(((canvasY - bounds.minY) / bounds.height) * 100, 0, 100),
+  };
+}
+
+function fromMinimapPercent(percentX, percentY) {
+  const bounds = state.minimapBounds || getMinimapBounds(state.positioned);
+  return {
+    x: bounds.minX + bounds.width * percentX,
+    y: bounds.minY + bounds.height * percentY,
+  };
 }
 
 function renderSelection() {
@@ -406,6 +599,7 @@ async function handleAsk() {
     const answer = state.mockMode ? await makeLocalDraft(question, context) : await askGemini(question, context);
     answerNode.text = answer;
     answerNode.loading = false;
+    scheduleAnswerCollapse(answerNode.id);
     setStatus(state.mockMode ? "本地草稿已生成，可继续分叉追问。" : "Gemini 回答已加入脑图。");
   } catch (error) {
     answerNode.text = `请求失败：${error.message}`;
@@ -544,6 +738,7 @@ function sortModels(models) {
 function resetTree() {
   state.tree = createInitialTree();
   state.selectedId = state.tree.id;
+  state.hasPositionedViewport = false;
   persist();
   render();
   setStatus("已经开启一棵新的对话树。");
@@ -564,6 +759,7 @@ function seedExample() {
     ],
   };
   state.selectedId = state.tree.children[0].children[0].id;
+  state.hasPositionedViewport = false;
   persist();
   render();
   setStatus("示例树已载入，可以点击任意回答继续发散。");
@@ -608,7 +804,9 @@ function importTree(event) {
       const imported = JSON.parse(reader.result);
       if (!imported.id || !Array.isArray(imported.children)) throw new Error("JSON 结构不符合对话树格式。");
       state.tree = imported;
+      shiftLegacyNodePositions(state.tree);
       state.selectedId = imported.id;
+      state.hasPositionedViewport = false;
       persist();
       render();
       setStatus("对话树已导入。");
@@ -629,12 +827,42 @@ function setZoom(nextZoom) {
 function resetView() {
   state.zoom = 1;
   applyZoom();
-  els.viewport.scrollTo({ left: 0, top: 0, behavior: "smooth" });
+  scrollToCanvasOrigin("smooth");
 }
 
 function applyZoom() {
   const transform = `scale(${state.zoom})`;
   els.mindmap.style.transform = transform;
+  renderMinimapViewport();
+}
+
+function ensureViewportPosition() {
+  if (state.hasPositionedViewport) return;
+  state.hasPositionedViewport = true;
+  requestAnimationFrame(() => scrollToCanvasOrigin("auto"));
+}
+
+function scrollToCanvasOrigin(behavior = "auto") {
+  els.viewport.scrollTo({
+    left: Math.max(0, CANVAS_ORIGIN_X * state.zoom - 120),
+    top: Math.max(0, CANVAS_ORIGIN_Y * state.zoom - 170),
+    behavior,
+  });
+  requestAnimationFrame(renderMinimapViewport);
+}
+
+function jumpToMinimapPoint(event) {
+  event.preventDefault();
+  const rect = els.minimap.getBoundingClientRect();
+  const target = fromMinimapPercent(
+    clamp((event.clientX - rect.left) / rect.width, 0, 1),
+    clamp((event.clientY - rect.top) / rect.height, 0, 1),
+  );
+  els.viewport.scrollTo({
+    left: clamp(target.x * state.zoom - els.viewport.clientWidth / 2, 0, CANVAS_SIZE * state.zoom),
+    top: clamp(target.y * state.zoom - els.viewport.clientHeight / 2, 0, CANVAS_SIZE * state.zoom),
+    behavior: "smooth",
+  });
 }
 
 function startPan(event) {
@@ -662,6 +890,7 @@ function panCanvas(event) {
   event.preventDefault();
   els.viewport.scrollLeft = state.panStartLeft - (event.clientX - state.panStartX);
   els.viewport.scrollTop = state.panStartTop - (event.clientY - state.panStartY);
+  renderMinimapViewport();
 }
 
 function handlePointerUp() {
@@ -696,8 +925,8 @@ function dragNode(event) {
   const dx = (event.clientX - state.dragStartX) / state.zoom;
   const dy = (event.clientY - state.dragStartY) / state.zoom;
   if (Math.abs(dx) > 2 || Math.abs(dy) > 2) state.dragMoved = true;
-  state.dragNode.x = Math.max(0, state.dragNodeStartX + dx);
-  state.dragNode.y = Math.max(0, state.dragNodeStartY + dy);
+  state.dragNode.x = clamp(state.dragNodeStartX + dx, 0, CANVAS_SIZE - 320);
+  state.dragNode.y = clamp(state.dragNodeStartY + dy, 0, CANVAS_SIZE - 320);
   state.dragCard.style.left = `${state.dragNode.x}px`;
   state.dragCard.style.top = `${state.dragNode.y}px`;
   const entry = state.positioned.find((item) => item.node.id === state.dragNode.id);
@@ -705,6 +934,7 @@ function dragNode(event) {
     entry.x = state.dragNode.x;
     entry.y = state.dragNode.y;
     renderLinks(state.positioned);
+    renderMinimap(state.positioned);
   }
 }
 
@@ -730,6 +960,7 @@ function handleWheelZoom(event) {
   applyZoom();
   els.viewport.scrollLeft = beforeX * nextZoom - (event.clientX - rect.left);
   els.viewport.scrollTop = beforeY * nextZoom - (event.clientY - rect.top);
+  renderMinimapViewport();
 }
 
 function estimateNodeHeight(text) {
@@ -738,7 +969,82 @@ function estimateNodeHeight(text) {
     const weightedLength = [...line].reduce((count, char) => count + (char.charCodeAt(0) > 255 ? 1.75 : 1), 0);
     return sum + Math.max(1, Math.ceil(weightedLength / 24));
   }, 0);
-  return Math.max(110, 70 + lineCount * 22);
+  return Math.max(NODE_MIN_HEIGHT, 70 + lineCount * 22);
+}
+
+function getNodeDisplayHeight(node) {
+  const fullHeight = estimateNodeHeight(node.text);
+  return isNodeCollapsed(node) ? Math.min(fullHeight, NODE_COLLAPSED_HEIGHT) : fullHeight;
+}
+
+function isNodeCollapsed(node) {
+  if (!node || node.loading) return false;
+  if (state.pinnedNodeIds.has(node.id)) return false;
+  return state.collapsedNodeIds.has(node.id) && estimateNodeHeight(node.text) > NODE_COLLAPSED_HEIGHT;
+}
+
+function scheduleAnswerCollapse(nodeId) {
+  state.collapsedNodeIds.delete(nodeId);
+  if (state.collapseTimers.has(nodeId)) clearTimeout(state.collapseTimers.get(nodeId));
+  const timer = setTimeout(() => {
+    state.collapseTimers.delete(nodeId);
+    if (state.pinnedNodeIds.has(nodeId)) return;
+    state.collapsedNodeIds.add(nodeId);
+    render();
+  }, ANSWER_COLLAPSE_DELAY);
+  state.collapseTimers.set(nodeId, timer);
+}
+
+function pinNodeOpen(nodeId) {
+  state.pinnedNodeIds.add(nodeId);
+  state.collapsedNodeIds.delete(nodeId);
+  if (state.collapseTimers.has(nodeId)) {
+    clearTimeout(state.collapseTimers.get(nodeId));
+    state.collapseTimers.delete(nodeId);
+  }
+}
+
+function toggleNodePinned(nodeId) {
+  if (state.pinnedNodeIds.has(nodeId)) {
+    state.pinnedNodeIds.delete(nodeId);
+    const node = findNode(state.tree, nodeId);
+    if (node && estimateNodeHeight(node.text) > NODE_COLLAPSED_HEIGHT) {
+      state.collapsedNodeIds.add(nodeId);
+    }
+    return;
+  }
+  pinNodeOpen(nodeId);
+}
+
+function cancelPendingSelection() {
+  if (!state.clickSelectTimer) return;
+  clearTimeout(state.clickSelectTimer);
+  state.clickSelectTimer = 0;
+}
+
+function prepareCollapsedAnswers(node) {
+  if (!node) return;
+  if (
+    node.role === "model" &&
+    !node.loading &&
+    !state.pinnedNodeIds.has(node.id) &&
+    !state.collapseTimers.has(node.id) &&
+    estimateNodeHeight(node.text) > NODE_COLLAPSED_HEIGHT
+  ) {
+    state.collapsedNodeIds.add(node.id);
+  }
+  (node.children || []).forEach(prepareCollapsedAnswers);
+}
+
+function shiftLegacyNodePositions(node) {
+  if (!node) return;
+  if (Number.isFinite(node.x) && node.x < CANVAS_ORIGIN_X / 2) {
+    node.x += CANVAS_ORIGIN_X;
+  }
+  if (Number.isFinite(node.y) && node.y < CANVAS_ORIGIN_Y / 2) {
+    node.y += CANVAS_ORIGIN_Y;
+  }
+  (node.children || []).forEach(shiftLegacyNodePositions);
 }
 
 function setBusy(isBusy) {
@@ -807,6 +1113,10 @@ function formatTime(timestamp) {
 function makeId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function getStored(key) {

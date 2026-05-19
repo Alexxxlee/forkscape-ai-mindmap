@@ -117,11 +117,18 @@ button,
   color: #fffaf0;
   background: rgba(255, 250, 240, .07);
   text-align: left;
+  transition: border-color .16s ease, background .16s ease, opacity .16s ease;
 }
 
 .history-item.active {
   border-color: var(--gold);
   background: rgba(216, 169, 45, .18);
+}
+
+.history-item.dragging {
+  opacity: .46;
+  border-color: rgba(216, 169, 45, .76);
+  background: rgba(216, 169, 45, .12);
 }
 
 .history-item-title {
@@ -243,6 +250,13 @@ button,
   cursor: grab;
   user-select: none;
   overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.mindmap-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .mindmap-viewport.dragging {
@@ -251,16 +265,94 @@ button,
 
 .mindmap {
   position: relative;
-  min-width: 900px;
-  min-height: 520px;
+  min-width: 24000px;
+  min-height: 24000px;
   transform-origin: 0 0;
+}
+
+.canvas-help {
+  position: absolute;
+  z-index: 12;
+  right: 18px;
+  bottom: 18px;
+  max-width: calc(100% - 36px);
+  color: rgba(23, 23, 23, .58);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.canvas-minimap {
+  position: absolute;
+  z-index: 12;
+  left: 18px;
+  bottom: 18px;
+  width: 156px;
+  height: 156px;
+  border: 1px solid rgba(23, 23, 23, .36);
+  border-radius: 6px;
+  background:
+    linear-gradient(90deg, rgba(23, 23, 23, .07) 1px, transparent 1px),
+    linear-gradient(rgba(23, 23, 23, .06) 1px, transparent 1px),
+    rgba(255, 251, 241, .82);
+  background-size: 16px 16px;
+  box-shadow: 5px 5px 0 rgba(23, 23, 23, .11);
+  cursor: crosshair;
+  overflow: hidden;
+}
+
+.minimap-nodes {
+  position: absolute;
+  inset: 0;
+}
+
+.minimap-viewport {
+  position: absolute;
+}
+
+.minimap-node {
+  position: absolute;
+  min-width: 4px;
+  min-height: 3px;
+  border: 1px solid rgba(23, 23, 23, .38);
+  border-radius: 2px;
+  background: var(--blue);
+  opacity: .82;
+}
+
+.minimap-node.root {
+  background: var(--ink);
+}
+
+.minimap-node.user {
+  background: var(--teal);
+}
+
+.minimap-node.model {
+  background: var(--gold);
+}
+
+.minimap-node.selected {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px rgba(185, 64, 53, .24);
+  background: var(--red);
+  opacity: 1;
+}
+
+.minimap-viewport {
+  width: 12px;
+  height: 10px;
+  border: 1.5px solid var(--red);
+  background: rgba(185, 64, 53, .08);
+  box-shadow: 0 0 0 1px rgba(255, 251, 241, .76);
 }
 
 .link-layer {
   position: absolute;
   inset: 0;
-  width: 2400px;
-  height: 1600px;
+  width: 24000px;
+  height: 24000px;
   overflow: visible;
   pointer-events: none;
 }
@@ -275,7 +367,7 @@ button,
 .node-card {
   position: absolute;
   width: var(--node-w);
-  min-height: 110px;
+  min-height: var(--node-display-height, 110px);
   padding: 14px 15px 15px;
   border: 1.5px solid var(--ink);
   border-radius: 8px;
@@ -283,7 +375,7 @@ button,
   box-shadow: 9px 9px 0 rgba(23, 23, 23, .12);
   outline: 0;
   cursor: grab;
-  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+  transition: min-height .38s ease, transform .18s ease, box-shadow .18s ease, border-color .18s ease;
 }
 
 .node-card.dragging {
@@ -294,6 +386,7 @@ button,
 }
 
 .node-card:hover {
+  z-index: 4;
   transform: translateY(-2px);
   box-shadow: 12px 13px 0 rgba(23, 23, 23, .14);
 }
@@ -318,6 +411,15 @@ button,
 
 .node-card.loading {
   animation: pulse 1.1s ease-in-out infinite alternate;
+}
+
+.node-card.collapsed {
+  overflow: hidden;
+}
+
+.node-card.collapsed:hover {
+  min-height: var(--node-full-height, var(--node-display-height, 110px));
+  overflow: visible;
 }
 
 .node-card-top {
@@ -359,6 +461,17 @@ button,
   line-height: 1.45;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  max-height: none;
+  transition: max-height .38s ease;
+}
+
+.node-card.collapsed .node-text {
+  max-height: 88px;
+  overflow: hidden;
+}
+
+.node-card.collapsed:hover .node-text {
+  max-height: calc(var(--node-full-height, 320px) - 68px);
 }
 
 .side-panel {
@@ -570,6 +683,22 @@ textarea {
   .topbar h1 {
     max-width: 230px;
     font-size: 34px;
+  }
+
+  .canvas-help {
+    right: 12px;
+    bottom: 12px;
+    max-width: calc(100% - 24px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 10px;
+  }
+
+  .canvas-minimap {
+    left: 12px;
+    bottom: 12px;
+    width: 118px;
+    height: 118px;
   }
 
   .side-panel {

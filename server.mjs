@@ -15,6 +15,13 @@ const types = {
 
 createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${request.headers.host}`);
+  const accept = request.headers.accept || "";
+
+  if (url.pathname === "/app.js" && accept.includes("text/html")) {
+    response.writeHead(302, { Location: "/" });
+    response.end();
+    return;
+  }
 
   if (url.pathname === "/api/sessions") {
     if (request.method === "GET") {
