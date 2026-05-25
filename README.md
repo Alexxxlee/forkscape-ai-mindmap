@@ -1,8 +1,12 @@
 # Forkscape
 
+Forkscape 是一个面向 AI 对话的分支画布工具。它把 Gemini 对话整理成类似脑图的工作区，让每一次回答都可以继续追问、分叉探索、拖动画布整理，并保存成自己的思考历史。
+
+我是一个业余小白，这个项目是我根据自己的日常需求一点点做出来的。它不是一个成熟商业产品，而是一个为了让 AI 对话更容易回看、分支和整理的小型个人项目。
+
 Forkscape is a branching canvas for AI conversations. It turns a Gemini chat into a mind-map-like workspace where every answer can be forked, explored, dragged, and saved as part of your thinking history.
 
-Current version: `v0.3.0`
+Current version: `v0.3.1`
 
 ## Background
 

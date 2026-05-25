@@ -2,6 +2,13 @@
 
 All notable changes to Forkscape are documented here.
 
+## v0.3.1 - 2026-05-25
+
+### Changed
+
+- Added a Chinese project introduction before the English README introduction.
+- Clarified that Forkscape is a personal project built by a hobbyist beginner around everyday needs.
+
 ## v0.3.0 - 2026-05-25
 
 ### Added
