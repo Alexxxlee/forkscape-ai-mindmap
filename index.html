@@ -38,7 +38,7 @@
         </div>
       </div>
       <aside class="canvas-help" aria-label="基础操作方法">
-        操作指南：中键拖动画布 · 单击选中节点 · 双击展开/缩短回答
+        操作指南：中键拖动画布 · 单击选中节点 · 双击展开/缩短回答 · 三击选择后续对话 · 双击空格整理选中 · Delete 删除选中 · Esc 取消选中
       </aside>
       <aside id="canvasMinimap" class="canvas-minimap" aria-label="画布缩略图">
         <div id="minimapNodes" class="minimap-nodes"></div>
@@ -63,9 +63,13 @@
         </div>
         <div class="inline-field">
           <select id="modelSelect" aria-label="模型">
-            <option value="gemini-1.5-flash">gemini-1.5-flash</option>
-            <option value="gemini-1.5-pro">gemini-1.5-pro</option>
-            <option value="gemini-2.0-flash-exp">gemini-2.0-flash-exp</option>
+            <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+            <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
+            <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+            <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+            <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+            <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
           </select>
           <button id="toggleMock" class="quiet-button" aria-pressed="false">本地草稿</button>
         </div>
@@ -73,7 +77,10 @@
 
       <section class="control-block composer-block">
         <label for="promptInput">针对当前节点追问</label>
-        <textarea id="promptInput" rows="7" placeholder="比如：把这个回答展开成三个实现方案，并比较取舍"></textarea>
+        <div class="textarea-wrap">
+          <textarea id="promptInput" rows="7" placeholder="比如：把这个回答展开成三个实现方案，并比较取舍"></textarea>
+          <span class="shortcut-hint">Ctrl+Enter 发送</span>
+        </div>
         <button id="askButton" class="primary-button">发送到 Gemini</button>
         <p id="statusText" class="status-text" aria-live="polite"></p>
       </section>

@@ -2,6 +2,25 @@
 
 All notable changes to Forkscape are documented here.
 
+## v0.3.0 - 2026-05-25
+
+### Added
+
+- Common Gemini model list for a cleaner model selector.
+- Answer placement rules that put replies to the right of the current question and stack multiple answers vertically.
+- Ctrl+Enter send hint in the focused follow-up composer.
+- Triple-click selection for the current card and its downstream conversation cards.
+- Group dragging and Delete key removal for selected conversation groups.
+- Esc key and blank-canvas click actions to cancel the current selection.
+- Double-Space auto-arrange for selected conversation groups.
+
+### Changed
+
+- Improved card selection responsiveness.
+- Restored direct double-click expand and collapse behavior for cards, including when they are not already selected.
+- Prevented generated cards from overlapping during layout updates.
+- Updated the canvas operation guide with the newer keyboard and mouse actions.
+
 ## v0.2.0 - 2026-05-19
 
 ### Added

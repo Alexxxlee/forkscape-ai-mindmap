@@ -4,7 +4,16 @@ const ACTIVE_SESSION_STORAGE = "gemini-branch-mindmap:active-session";
 const KEY_STORAGE = "gemini-branch-mindmap:api-key";
 const MODEL_STORAGE = "gemini-branch-mindmap:model";
 const DEFAULT_API_KEY = "";
-const FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+const COMMON_MODELS = [
+  "gemini-3.5-flash",
+  "gemini-3.1-pro-preview",
+  "gemini-3-flash-preview",
+  "gemini-3.1-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash-lite",
+];
+const FALLBACK_MODELS = COMMON_MODELS;
 const NODE_MIN_HEIGHT = 110;
 const NODE_COLLAPSED_HEIGHT = NODE_MIN_HEIGHT * 2;
 const ANSWER_COLLAPSE_DELAY = 5000;
@@ -28,8 +37,14 @@ const state = {
   pinnedNodeIds: new Set(),
   collapseTimers: new Map(),
   clickSelectTimer: 0,
+  multiClickTimer: 0,
   hasPositionedViewport: false,
   minimapBounds: null,
+  selectedGroupRootId: "",
+  selectedGroupIds: new Set(),
+  lastSpacePress: 0,
+  blankPointerDown: false,
+  panMoved: false,
 };
 
 const els = {
@@ -107,6 +122,7 @@ function bindEvents() {
   });
   window.addEventListener("mousemove", handlePointerMove);
   window.addEventListener("mouseup", handlePointerUp);
+  window.addEventListener("keydown", handleGlobalKeydown);
   els.minimap.addEventListener("mousedown", jumpToMinimapPoint);
   els.promptInput.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -448,11 +464,12 @@ function layoutTree(root) {
   const all = [];
   const nodeWidth = 252;
   const levelGap = 118;
-  const siblingGap = 26;
+  const siblingGap = 34;
   const topInset = 46;
 
   measure(root, 0, null);
   place(root, 0, topInset);
+  resolveNodeOverlaps(all, nodeWidth, siblingGap);
 
   els.mindmap.style.width = `${CANVAS_SIZE}px`;
   els.mindmap.style.height = `${CANVAS_SIZE}px`;
@@ -489,6 +506,24 @@ function layoutTree(root) {
   }
 }
 
+function resolveNodeOverlaps(entries, nodeWidth, gap) {
+  const sorted = [...entries].sort((a, b) => a.y - b.y || a.x - b.x);
+  for (let i = 0; i < sorted.length; i += 1) {
+    const entry = sorted[i];
+    let nextY = entry.y;
+    for (let j = 0; j < i; j += 1) {
+      const other = sorted[j];
+      const overlapsX = entry.x < other.x + nodeWidth + gap && entry.x + nodeWidth + gap > other.x;
+      const overlapsY = nextY < other.y + other.height + gap && nextY + entry.height + gap > other.y;
+      if (overlapsX && overlapsY) nextY = other.y + other.height + gap;
+    }
+    if (nextY !== entry.y) {
+      entry.y = nextY;
+      if (Number.isFinite(entry.node.y)) entry.node.y = nextY;
+    }
+  }
+}
+
 function renderNodes(positioned) {
   els.mindmap.replaceChildren(els.linkLayer);
   positioned.forEach(({ node, x, y }) => {
@@ -499,6 +534,7 @@ function renderNodes(positioned) {
     const isCollapsed = isNodeCollapsed(node);
     card.classList.add(node.role);
     if (node.id === state.selectedId) card.classList.add("selected");
+    if (state.selectedGroupIds.has(node.id)) card.classList.add("group-selected");
     if (isCollapsed) card.classList.add("collapsed");
     if (node.loading) card.classList.add("loading");
     card.dataset.id = node.id;
@@ -515,23 +551,27 @@ function renderNodes(positioned) {
         state.suppressNextClick = false;
         return;
       }
-      if (event.detail >= 2) {
-        cancelPendingSelection();
-        toggleNodePinned(node.id);
-        state.selectedId = node.id;
+      if (event.detail >= 3) {
+        cancelPendingNodeClicks();
+        selectNodeGroup(node.id);
         render();
         return;
       }
-      if (state.clickSelectTimer) clearTimeout(state.clickSelectTimer);
-      state.clickSelectTimer = setTimeout(() => {
-        state.clickSelectTimer = 0;
-        state.selectedId = node.id;
-        render();
-      }, 320);
+      if (event.detail > 1) {
+        return;
+      }
+      cancelPendingNodeClicks();
+      clearNodeGroupSelection();
+      state.selectedId = node.id;
+      render();
     });
     card.addEventListener("dblclick", (event) => {
       event.preventDefault();
-      cancelPendingSelection();
+      cancelPendingNodeClicks();
+      clearNodeGroupSelection();
+      toggleNodePinned(node.id);
+      state.selectedId = node.id;
+      render();
     });
     els.mindmap.appendChild(fragment);
   });
@@ -651,6 +691,8 @@ async function handleAsk() {
   }
 
   const parent = findNode(state.tree, state.selectedId) || state.tree;
+  const isAnswerToCurrentQuestion = parent.role === "user";
+  const answerParent = isAnswerToCurrentQuestion ? parent : null;
   const questionNode = {
     id: makeId(),
     role: "user",
@@ -667,8 +709,12 @@ async function handleAsk() {
     children: [],
   };
 
-  questionNode.children.push(answerNode);
-  parent.children.push(questionNode);
+  if (answerParent) {
+    answerParent.children.push(answerNode);
+  } else {
+    questionNode.children.push(answerNode);
+    parent.children.push(questionNode);
+  }
   state.selectedId = answerNode.id;
   els.promptInput.value = "";
   persist();
@@ -677,7 +723,15 @@ async function handleAsk() {
   setStatus("正在生成回答...");
 
   try {
-    const context = getPath(state.tree, parent.id).concat(questionNode);
+    const context = answerParent
+      ? getPath(state.tree, answerParent.id).concat({
+          id: makeId(),
+          role: "user",
+          text: question,
+          createdAt: Date.now(),
+          children: [],
+        })
+      : getPath(state.tree, parent.id).concat(questionNode);
     const answer = state.mockMode ? await makeLocalDraft(question, context) : await askGemini(question, context);
     answerNode.text = answer;
     answerNode.loading = false;
@@ -777,7 +831,7 @@ async function refreshModels() {
       .filter((model) => (model.supportedGenerationMethods || []).includes("generateContent"))
       .map((model) => model.name.replace(/^models\//, ""))
       .filter((name) => name.startsWith("gemini-"))
-      .filter((name) => !/(embedding|aqa|tts|image|vision|robotics|computer-use|customtools)/i.test(name));
+      .filter((name) => COMMON_MODELS.includes(name));
 
     if (!models.length) throw new Error("没有找到支持文本对话的 generateContent 模型。");
     setModelOptions(sortModels([...new Set(models)]), previous);
@@ -949,9 +1003,12 @@ function jumpToMinimapPoint(event) {
 
 function startPan(event) {
   if (event.target.closest(".node-card")) return;
+  if (event.target.closest(".canvas-minimap, .canvas-help")) return;
   if (event.button !== 0 && event.button !== 1) return;
   event.preventDefault();
   state.isPanning = true;
+  state.blankPointerDown = event.button === 0;
+  state.panMoved = false;
   state.panStartX = event.clientX;
   state.panStartY = event.clientY;
   state.panStartLeft = els.viewport.scrollLeft;
@@ -970,6 +1027,9 @@ function handlePointerMove(event) {
 function panCanvas(event) {
   if (!state.isPanning) return;
   event.preventDefault();
+  if (Math.abs(event.clientX - state.panStartX) > 3 || Math.abs(event.clientY - state.panStartY) > 3) {
+    state.panMoved = true;
+  }
   els.viewport.scrollLeft = state.panStartLeft - (event.clientX - state.panStartX);
   els.viewport.scrollTop = state.panStartTop - (event.clientY - state.panStartY);
   renderMinimapViewport();
@@ -982,8 +1042,12 @@ function handlePointerUp() {
 
 function stopPan() {
   if (!state.isPanning) return;
+  const shouldCancelSelection = state.blankPointerDown && !state.panMoved;
   state.isPanning = false;
+  state.blankPointerDown = false;
+  state.panMoved = false;
   els.viewport.classList.remove("dragging");
+  if (shouldCancelSelection) cancelNodeSelection("quiet");
 }
 
 function startNodeDrag(event, node, card) {
@@ -991,15 +1055,31 @@ function startNodeDrag(event, node, card) {
   event.preventDefault();
   event.stopPropagation();
   const entry = state.positioned.find((item) => item.node.id === node.id);
+  const draggedIds = state.selectedGroupIds.has(node.id) ? [...state.selectedGroupIds] : [node.id];
   state.isNodeDragging = true;
   state.dragNode = node;
   state.dragCard = card;
+  state.dragNodeIds = draggedIds;
+  state.dragGroupStart = new Map(draggedIds.map((id) => {
+    const groupNode = findNode(state.tree, id);
+    const groupEntry = state.positioned.find((item) => item.node.id === id);
+    return [id, {
+      node: groupNode,
+      x: groupEntry?.x ?? groupNode?.x ?? 0,
+      y: groupEntry?.y ?? groupNode?.y ?? 0,
+    }];
+  }).filter(([, item]) => item.node));
   state.dragStartX = event.clientX;
   state.dragStartY = event.clientY;
   state.dragNodeStartX = entry?.x ?? node.x ?? 0;
   state.dragNodeStartY = entry?.y ?? node.y ?? 0;
   state.dragMoved = false;
   card.classList.add("dragging");
+  if (draggedIds.length > 1) {
+    draggedIds.forEach((id) => {
+      getNodeCardElement(id)?.classList.add("dragging");
+    });
+  }
 }
 
 function dragNode(event) {
@@ -1007,25 +1087,41 @@ function dragNode(event) {
   const dx = (event.clientX - state.dragStartX) / state.zoom;
   const dy = (event.clientY - state.dragStartY) / state.zoom;
   if (Math.abs(dx) > 2 || Math.abs(dy) > 2) state.dragMoved = true;
-  state.dragNode.x = clamp(state.dragNodeStartX + dx, 0, CANVAS_SIZE - 320);
-  state.dragNode.y = clamp(state.dragNodeStartY + dy, 0, CANVAS_SIZE - 320);
-  state.dragCard.style.left = `${state.dragNode.x}px`;
-  state.dragCard.style.top = `${state.dragNode.y}px`;
-  const entry = state.positioned.find((item) => item.node.id === state.dragNode.id);
-  if (entry) {
-    entry.x = state.dragNode.x;
-    entry.y = state.dragNode.y;
-    renderLinks(state.positioned);
-    renderMinimap(state.positioned);
-  }
+  state.dragGroupStart.forEach((start, id) => {
+    const nextX = clamp(start.x + dx, 0, CANVAS_SIZE - 320);
+    const nextY = clamp(start.y + dy, 0, CANVAS_SIZE - 320);
+    start.node.x = nextX;
+    start.node.y = nextY;
+    const card = getNodeCardElement(id);
+    if (card) {
+      card.style.left = `${nextX}px`;
+      card.style.top = `${nextY}px`;
+    }
+    const entry = state.positioned.find((item) => item.node.id === id);
+    if (entry) {
+      entry.x = nextX;
+      entry.y = nextY;
+    }
+  });
+  renderLinks(state.positioned);
+  renderMinimap(state.positioned);
 }
 
 function stopNodeDrag() {
   if (!state.isNodeDragging) return;
   state.dragCard?.classList.remove("dragging");
+  (state.dragNodeIds || []).forEach((id) => {
+    getNodeCardElement(id)?.classList.remove("dragging");
+  });
   state.isNodeDragging = false;
+  state.dragNodeIds = [];
+  state.dragGroupStart = new Map();
   state.suppressNextClick = state.dragMoved;
   persist();
+}
+
+function getNodeCardElement(nodeId) {
+  return [...els.mindmap.querySelectorAll(".node-card")].find((card) => card.dataset.id === nodeId);
 }
 
 function handleWheelZoom(event) {
@@ -1104,6 +1200,93 @@ function cancelPendingSelection() {
   state.clickSelectTimer = 0;
 }
 
+function cancelPendingNodeClicks() {
+  cancelPendingSelection();
+  if (!state.multiClickTimer) return;
+  clearTimeout(state.multiClickTimer);
+  state.multiClickTimer = 0;
+}
+
+function selectNodeGroup(nodeId) {
+  const node = findNode(state.tree, nodeId);
+  if (!node) return;
+  state.selectedId = nodeId;
+  state.selectedGroupRootId = nodeId;
+  state.selectedGroupIds = new Set(collectSubtreeIds(node));
+}
+
+function clearNodeGroupSelection() {
+  state.selectedGroupRootId = "";
+  state.selectedGroupIds.clear();
+}
+
+function collectSubtreeIds(node) {
+  return [node.id].concat((node.children || []).flatMap(collectSubtreeIds));
+}
+
+function handleGlobalKeydown(event) {
+  if ((event.key === " " || event.code === "Space") && !event.target?.closest?.("input, textarea, select")) {
+    event.preventDefault();
+    const now = Date.now();
+    if (now - state.lastSpacePress < 420) {
+      state.lastSpacePress = 0;
+      autoArrangeSelectedNodes();
+      return;
+    }
+    state.lastSpacePress = now;
+    return;
+  }
+  if (event.key === "Escape") {
+    if (event.target?.closest?.("input, textarea, select")) return;
+    event.preventDefault();
+    cancelNodeSelection();
+    return;
+  }
+  if (event.key !== "Delete" || !state.selectedGroupIds.size) return;
+  if (event.target?.closest?.("input, textarea, select")) return;
+  event.preventDefault();
+  deleteSelectedNodeGroup();
+}
+
+function autoArrangeSelectedNodes() {
+  const rootId = state.selectedGroupRootId || state.selectedId || state.tree.id;
+  const node = findNode(state.tree, rootId);
+  if (!node) return;
+  clearManualPositions(node);
+  state.selectedGroupRootId = rootId;
+  state.selectedGroupIds = new Set(collectSubtreeIds(node));
+  persist();
+  render();
+  setStatus("已自动整理选中的对话框。");
+}
+
+function clearManualPositions(node) {
+  delete node.x;
+  delete node.y;
+  (node.children || []).forEach(clearManualPositions);
+}
+
+function cancelNodeSelection(mode = "status") {
+  cancelPendingNodeClicks();
+  clearNodeGroupSelection();
+  state.selectedId = "";
+  render();
+  if (mode !== "quiet") setStatus("已取消选中。");
+}
+
+function deleteSelectedNodeGroup() {
+  if (!state.selectedGroupRootId || state.selectedGroupRootId === state.tree.id) {
+    setStatus("根节点不能删除。");
+    return;
+  }
+  if (!removeNodeById(state.tree, state.selectedGroupRootId)) return;
+  clearNodeGroupSelection();
+  state.selectedId = state.tree.id;
+  persist();
+  render();
+  setStatus("已删除选中的对话框。");
+}
+
 function prepareCollapsedAnswers(node) {
   if (!node) return;
   if (
@@ -1152,6 +1335,15 @@ function findNode(node, id) {
     if (found) return found;
   }
   return null;
+}
+
+function removeNodeById(node, id) {
+  const index = node.children.findIndex((child) => child.id === id);
+  if (index >= 0) {
+    node.children.splice(index, 1);
+    return true;
+  }
+  return node.children.some((child) => removeNodeById(child, id));
 }
 
 function getPath(root, id, trail = []) {

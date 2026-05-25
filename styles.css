@@ -439,6 +439,16 @@ button,
   box-shadow: 0 0 0 4px rgba(185, 64, 53, .14), 12px 13px 0 rgba(23, 23, 23, .14);
 }
 
+.node-card.group-selected {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 4px rgba(13, 124, 118, .16), 9px 9px 0 rgba(23, 23, 23, .12);
+}
+
+.node-card.group-selected.selected {
+  border-color: var(--red);
+  box-shadow: 0 0 0 4px rgba(185, 64, 53, .18), 0 0 0 8px rgba(13, 124, 118, .12), 12px 13px 0 rgba(23, 23, 23, .14);
+}
+
 .node-card.root {
   background: #171717;
   color: #fffaf0;
@@ -597,8 +607,22 @@ select {
 textarea {
   min-height: 154px;
   resize: vertical;
-  padding: 12px;
+  padding: 12px 12px 30px;
   line-height: 1.5;
+}
+
+.textarea-wrap {
+  position: relative;
+}
+
+.shortcut-hint {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  color: rgba(109, 102, 89, .72);
+  font-size: 11px;
+  line-height: 1;
+  pointer-events: none;
 }
 
 .quiet-button,
