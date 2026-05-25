@@ -2,6 +2,12 @@
 
 All notable changes to Forkscape are documented here.
 
+## v0.3.2 - 2026-05-25
+
+### Changed
+
+- Updated the README title to `Forkscape - AI 对话脑图` so the project purpose is clear at a glance.
+
 ## v0.3.1 - 2026-05-25
 
 ### Changed
