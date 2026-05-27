@@ -2,6 +2,14 @@
 
 All notable changes to Forkscape are documented here.
 
+## v0.3.3 - 2026-05-27
+
+### Added
+
+- Added a real product screenshot to the top of the README.
+- Added a Chinese audience section explaining who Forkscape is useful for.
+- Added GitHub repository topics for better discovery.
+
 ## v0.3.2 - 2026-05-25
 
 ### Changed
