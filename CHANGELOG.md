@@ -2,6 +2,16 @@
 
 All notable changes to Forkscape are documented here.
 
+## v0.4.1 - 2026-06-01
+
+### Added
+
+- Mermaid export for Markdown documents and technical notes.
+
+### Changed
+
+- Updated README and project notes to include Mermaid export.
+
 ## v0.4.0 - 2026-06-01
 
 ### Added
@@ -12,6 +22,7 @@ All notable changes to Forkscape are documented here.
 - Markdown export for readable conversation notes.
 - PNG export for sharing the current conversation map as an image.
 - SVG export for scalable, editable conversation map graphics.
+- Mermaid export for Markdown documents and technical notes.
 
 ### Changed
 

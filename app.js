@@ -84,6 +84,7 @@ const els = {
   exportMarkdown: document.querySelector("#exportMarkdown"),
   exportPng: document.querySelector("#exportPng"),
   exportSvg: document.querySelector("#exportSvg"),
+  exportMermaid: document.querySelector("#exportMermaid"),
   importTree: document.querySelector("#importTree"),
   zoomIn: document.querySelector("#zoomIn"),
   zoomOut: document.querySelector("#zoomOut"),
@@ -127,6 +128,7 @@ function bindEvents() {
   els.exportMarkdown.addEventListener("click", exportMarkdown);
   els.exportPng.addEventListener("click", exportPng);
   els.exportSvg.addEventListener("click", exportSvg);
+  els.exportMermaid.addEventListener("click", exportMermaid);
   els.importTree.addEventListener("change", importTree);
   els.zoomIn.addEventListener("click", () => setZoom(state.zoom + 0.08));
   els.zoomOut.addEventListener("click", () => setZoom(state.zoom - 0.08));
@@ -1060,6 +1062,14 @@ function exportSvg() {
   setStatus("对话树 SVG 已导出。");
 }
 
+function exportMermaid() {
+  const session = state.sessions.find((item) => item.id === state.activeSessionId);
+  const title = session?.title || titleFromTree(state.tree) || "Forkscape 对话脑图";
+  const mermaid = treeToMermaid(state.tree, title);
+  downloadTextFile(mermaid, `${toFileSlug(title)}-${todayStamp()}.mmd`, "text/plain;charset=utf-8");
+  setStatus("对话树 Mermaid 已导出。");
+}
+
 function renderTreeToCanvas(entries) {
   const nodeWidth = 252;
   const padding = 180;
@@ -1345,6 +1355,51 @@ function treeToMarkdown(root, title) {
   ];
   (root.children || []).forEach((child) => appendNodeMarkdown(child, 2, lines));
   return `${lines.join("\n").trim()}\n`;
+}
+
+function treeToMermaid(root, title) {
+  const lines = [
+    "---",
+    `title: ${sanitizeMermaidTitle(title)}`,
+    "---",
+    "flowchart LR",
+  ];
+  appendMermaidNode(root, lines, new Set());
+  lines.push(
+    "classDef root fill:#171717,color:#fffaf0,stroke:#171717,stroke-width:1px;",
+    "classDef user fill:#e8f1f4,color:#171717,stroke:#171717,stroke-width:1px;",
+    "classDef model fill:#fff8dc,color:#171717,stroke:#171717,stroke-width:1px;",
+  );
+  return `${lines.join("\n")}\n`;
+}
+
+function appendMermaidNode(node, lines, seen) {
+  if (!node || seen.has(node.id)) return;
+  seen.add(node.id);
+  const id = mermaidNodeId(node.id);
+  lines.push(`  ${id}["${escapeMermaidLabel(mermaidNodeLabel(node))}"]`);
+  lines.push(`  class ${id} ${node.role || "model"};`);
+  (node.children || []).forEach((child) => {
+    const childId = mermaidNodeId(child.id);
+    lines.push(`  ${id} --> ${childId}`);
+    appendMermaidNode(child, lines, seen);
+  });
+}
+
+function mermaidNodeLabel(node) {
+  return `${roleLabel(node.role)}: ${truncate(String(node.text || "").replace(/\s+/g, " ").trim() || "空内容", 72)}`;
+}
+
+function mermaidNodeId(id) {
+  return `n${String(id).replace(/[^a-zA-Z0-9_]/g, "_")}`;
+}
+
+function escapeMermaidLabel(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\[/g, "(").replace(/\]/g, ")");
+}
+
+function sanitizeMermaidTitle(value) {
+  return String(value || "Forkscape 对话脑图").replace(/[\r\n]+/g, " ").trim();
 }
 
 function appendNodeMarkdown(node, level, lines) {

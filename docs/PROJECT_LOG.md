@@ -81,7 +81,7 @@ node_modules/
 - Branches can be collapsed and expanded from cards with child branches.
 - Double-middle-click on the canvas shows the whole visible conversation map.
 - The canvas grid now pans and zooms with the conversation cards.
-- Export supports JSON, Markdown, PNG, and SVG.
+- Export supports JSON, Markdown, PNG, SVG, and Mermaid.
 
 ## Important Security Notes
 
