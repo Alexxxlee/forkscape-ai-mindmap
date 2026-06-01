@@ -2,6 +2,24 @@
 
 All notable changes to Forkscape are documented here.
 
+## v0.4.0 - 2026-06-01
+
+### Added
+
+- History search across session titles and conversation node text.
+- Branch collapse and expand controls on cards with child branches.
+- Double-middle-click canvas overview to show all conversation cards.
+- Markdown export for readable conversation notes.
+- PNG export for sharing the current conversation map as an image.
+- SVG export for scalable, editable conversation map graphics.
+
+### Changed
+
+- Moved the grid background onto the canvas so it pans and zooms with the conversation map.
+- Split JSON export from document/image exports in the toolbar.
+- Updated the canvas operation guide with the overview shortcut.
+- Reorganized the README into a Chinese-first bilingual introduction.
+
 ## v0.3.3 - 2026-05-27
 
 ### Added

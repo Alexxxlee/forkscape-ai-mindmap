@@ -1,6 +1,6 @@
 # Forkscape Project Log
 
-Last updated: 2026-05-18
+Last updated: 2026-06-01
 
 ## Project Summary
 
@@ -77,6 +77,11 @@ node_modules/
 - The previous "new tree" button now creates a new history session instead of overwriting old work.
 - Local history is persisted by `server.mjs` to `.gemini-branch-sessions.json`.
 - If server persistence is unavailable, app falls back to browser storage where possible.
+- History sessions can be searched by title and conversation content.
+- Branches can be collapsed and expanded from cards with child branches.
+- Double-middle-click on the canvas shows the whole visible conversation map.
+- The canvas grid now pans and zooms with the conversation cards.
+- Export supports JSON, Markdown, PNG, and SVG.
 
 ## Important Security Notes
 
@@ -97,13 +102,13 @@ Current `.gitignore` includes those files.
 Repository:
 
 ```text
-https://github.com/Alexxxlee/forkscape
+https://github.com/Alexxxlee/forkscape-ai-mindmap
 ```
 
 Recommended repo name:
 
 ```text
-forkscape
+forkscape-ai-mindmap
 ```
 
 Recommended license:
@@ -238,7 +243,7 @@ Phase 2: History memory
 - Delete sessions.
 - Search sessions.
 - Archive sessions.
-- Sort by update time.
+- Manual drag ordering.
 - Optional tags.
 
 Phase 3: Canvas experience
@@ -248,13 +253,15 @@ Phase 3: Canvas experience
 - Minimap.
 - Multi-select node drag.
 - Better overlap avoidance.
+- Grid moves and zooms with the canvas.
+- Double-middle-click overview.
 
 Phase 4: Export
 
 - Export Markdown.
-- Export Mermaid.
 - Export SVG.
 - Export PNG.
+- Export Mermaid.
 
 Phase 5: Production architecture
 
@@ -275,4 +282,3 @@ https://github.com/Alexxxlee/forkscape
 
 The app is a Gemini branching conversation mind-map with draggable nodes, zoom/pan canvas, model filtering, and persistent local history.
 ```
-

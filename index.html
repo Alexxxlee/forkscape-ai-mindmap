@@ -17,6 +17,10 @@
         <button id="toggleHistory" class="icon-button history-toggle" title="折叠历史" aria-label="折叠历史">‹</button>
       </div>
       <button id="newHistorySession" class="history-new">+ 新对话</button>
+      <label class="history-search">
+        <span>搜索历史</span>
+        <input id="historySearch" type="search" autocomplete="off" placeholder="标题或对话内容">
+      </label>
       <div id="historyList" class="history-list"></div>
     </aside>
     <section class="map-panel" aria-label="分支脑图">
@@ -38,7 +42,7 @@
         </div>
       </div>
       <aside class="canvas-help" aria-label="基础操作方法">
-        操作指南：中键拖动画布 · 单击选中节点 · 双击展开/缩短回答 · 三击选择后续对话 · 双击空格整理选中 · Delete 删除选中 · Esc 取消选中
+        操作指南：中键拖动画布 · 双击中键显示全部 · 单击选中节点 · 双击展开/缩短回答 · 三击选择后续对话 · 双击空格整理选中 · Delete 删除选中 · Esc 取消选中
       </aside>
       <aside id="canvasMinimap" class="canvas-minimap" aria-label="画布缩略图">
         <div id="minimapNodes" class="minimap-nodes"></div>
@@ -89,7 +93,10 @@
         <div class="branch-toolbar">
           <button id="newTree" class="tool-button">新树</button>
           <button id="seedExample" class="tool-button">示例</button>
-          <button id="exportTree" class="tool-button">导出</button>
+          <button id="exportTree" class="tool-button">JSON</button>
+          <button id="exportMarkdown" class="tool-button" title="导出 Markdown 文档">MD</button>
+          <button id="exportPng" class="tool-button" title="导出 PNG 图片">PNG</button>
+          <button id="exportSvg" class="tool-button" title="导出 SVG 矢量图">SVG</button>
           <label class="tool-button file-tool" for="importTree">导入</label>
           <input id="importTree" type="file" accept="application/json">
         </div>

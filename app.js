@@ -20,6 +20,9 @@ const ANSWER_COLLAPSE_DELAY = 5000;
 const CANVAS_SIZE = 24000;
 const CANVAS_ORIGIN_X = 11200;
 const CANVAS_ORIGIN_Y = 10800;
+const MIN_ZOOM = 0.42;
+const OVERVIEW_MIN_ZOOM = 0.22;
+const MAX_ZOOM = 1.6;
 
 const state = {
   selectedId: "root",
@@ -29,11 +32,13 @@ const state = {
   sessions: [],
   activeSessionId: "",
   historyCollapsed: false,
+  historySearchQuery: "",
   isPanning: false,
   isNodeDragging: false,
   suppressNextClick: false,
   positioned: [],
   collapsedNodeIds: new Set(),
+  collapsedBranchIds: new Set(),
   pinnedNodeIds: new Set(),
   collapseTimers: new Map(),
   clickSelectTimer: 0,
@@ -43,6 +48,7 @@ const state = {
   selectedGroupRootId: "",
   selectedGroupIds: new Set(),
   lastSpacePress: 0,
+  lastMiddlePress: 0,
   blankPointerDown: false,
   panMoved: false,
 };
@@ -53,6 +59,7 @@ const els = {
   historyList: document.querySelector("#historyList"),
   toggleHistory: document.querySelector("#toggleHistory"),
   newHistorySession: document.querySelector("#newHistorySession"),
+  historySearch: document.querySelector("#historySearch"),
   mindmap: document.querySelector("#mindmap"),
   viewport: document.querySelector("#mindmapViewport"),
   linkLayer: document.querySelector("#linkLayer"),
@@ -74,6 +81,9 @@ const els = {
   newTree: document.querySelector("#newTree"),
   seedExample: document.querySelector("#seedExample"),
   exportTree: document.querySelector("#exportTree"),
+  exportMarkdown: document.querySelector("#exportMarkdown"),
+  exportPng: document.querySelector("#exportPng"),
+  exportSvg: document.querySelector("#exportSvg"),
   importTree: document.querySelector("#importTree"),
   zoomIn: document.querySelector("#zoomIn"),
   zoomOut: document.querySelector("#zoomOut"),
@@ -97,6 +107,10 @@ async function init() {
 function bindEvents() {
   els.toggleHistory.addEventListener("click", toggleHistoryPanel);
   els.newHistorySession.addEventListener("click", createNewSession);
+  els.historySearch.addEventListener("input", () => {
+    state.historySearchQuery = els.historySearch.value.trim();
+    renderHistory();
+  });
   els.askButton.addEventListener("click", handleAsk);
   els.saveKey.addEventListener("click", saveApiKey);
   els.modelSelect.addEventListener("change", () => {
@@ -110,6 +124,9 @@ function bindEvents() {
   els.newTree.addEventListener("click", createNewSession);
   els.seedExample.addEventListener("click", seedExample);
   els.exportTree.addEventListener("click", exportTree);
+  els.exportMarkdown.addEventListener("click", exportMarkdown);
+  els.exportPng.addEventListener("click", exportPng);
+  els.exportSvg.addEventListener("click", exportSvg);
   els.importTree.addEventListener("change", importTree);
   els.zoomIn.addEventListener("click", () => setZoom(state.zoom + 0.08));
   els.zoomOut.addEventListener("click", () => setZoom(state.zoom - 0.08));
@@ -195,6 +212,7 @@ function createNewSession() {
   state.selectedId = state.tree.id;
   state.zoom = 1;
   state.hasPositionedViewport = false;
+  resetBranchViewState();
   persist();
   render();
   setStatus("已创建新的历史会话。");
@@ -208,6 +226,7 @@ function activateSession(sessionId) {
   shiftLegacyNodePositions(state.tree);
   state.selectedId = state.tree.id;
   state.hasPositionedViewport = false;
+  resetBranchViewState();
   persist(false);
   render();
 }
@@ -270,6 +289,9 @@ function render() {
 
 function renderHistory() {
   els.shell.classList.toggle("history-collapsed", state.historyCollapsed);
+  if (els.historySearch.value !== state.historySearchQuery) {
+    els.historySearch.value = state.historySearchQuery;
+  }
   els.historyList.innerHTML = "";
   if (!state.sessions.length) {
     const empty = document.createElement("p");
@@ -279,7 +301,16 @@ function renderHistory() {
     return;
   }
 
-  state.sessions.forEach((session) => {
+  const visibleSessions = state.sessions.filter(sessionMatchesHistorySearch);
+  if (!visibleSessions.length) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent = "没有匹配的历史对话。";
+    els.historyList.appendChild(empty);
+    return;
+  }
+
+  visibleSessions.forEach((session) => {
     const item = document.createElement("button");
     item.className = `history-item${session.id === state.activeSessionId ? " active" : ""}`;
     if (session.id === state.dragHistorySessionId) item.classList.add("dragging");
@@ -327,6 +358,22 @@ function renderHistory() {
     item.addEventListener("dragend", clearHistoryDragState);
     els.historyList.appendChild(item);
   });
+}
+
+function sessionMatchesHistorySearch(session) {
+  const query = state.historySearchQuery.trim().toLowerCase();
+  if (!query) return true;
+  const searchable = [
+    session.title || "",
+    formatTime(session.updatedAt),
+    collectNodeText(session.tree),
+  ].join(" ").toLowerCase();
+  return searchable.includes(query);
+}
+
+function collectNodeText(node) {
+  if (!node) return "";
+  return [node.text || "", ...(node.children || []).map(collectNodeText)].join(" ");
 }
 
 function getHistoryAction(target) {
@@ -483,7 +530,7 @@ function layoutTree(root) {
     const height = getNodeDisplayHeight(node);
     const entry = { node, depth, parentId, x: 0, y: 0, height, subtreeHeight: height };
     all.push(entry);
-    const childHeights = node.children.map((child) => measure(child, depth + 1, node.id));
+    const childHeights = getVisibleChildren(node).map((child) => measure(child, depth + 1, node.id));
     if (childHeights.length) {
       entry.subtreeHeight = Math.max(height, childHeights.reduce((sum, value) => sum + value, 0) + siblingGap * (childHeights.length - 1));
     }
@@ -498,7 +545,7 @@ function layoutTree(root) {
     entry.y = Number.isFinite(node.y) ? node.y : baseY;
 
     let childTop = top;
-    for (const child of node.children) {
+    for (const child of getVisibleChildren(node)) {
       const childEntry = all.find((item) => item.node.id === child.id);
       place(child, depth + 1, childTop);
       childTop += childEntry.subtreeHeight + siblingGap;
@@ -532,10 +579,12 @@ function renderNodes(positioned) {
     const fullHeight = estimateNodeHeight(node.text);
     const displayHeight = getNodeDisplayHeight(node);
     const isCollapsed = isNodeCollapsed(node);
+    const isBranchCollapsed = state.collapsedBranchIds.has(node.id);
     card.classList.add(node.role);
     if (node.id === state.selectedId) card.classList.add("selected");
     if (state.selectedGroupIds.has(node.id)) card.classList.add("group-selected");
     if (isCollapsed) card.classList.add("collapsed");
+    if (isBranchCollapsed) card.classList.add("branch-collapsed");
     if (node.loading) card.classList.add("loading");
     card.dataset.id = node.id;
     card.style.left = `${x}px`;
@@ -543,8 +592,26 @@ function renderNodes(positioned) {
     card.style.setProperty("--node-full-height", `${Math.round(fullHeight)}px`);
     card.style.setProperty("--node-display-height", `${Math.round(displayHeight)}px`);
     card.querySelector(".node-role").textContent = roleLabel(node.role);
-    card.querySelector(".node-count").textContent = `${node.children.length} 分支`;
+    const count = card.querySelector(".node-count");
+    count.textContent = isBranchCollapsed ? `已收起 ${node.children.length} 分支` : `${node.children.length} 分支`;
     card.querySelector(".node-text").textContent = node.text;
+    if (node.children.length) {
+      const toggle = document.createElement("button");
+      toggle.className = "branch-toggle";
+      toggle.type = "button";
+      toggle.textContent = isBranchCollapsed ? "展开" : "收起";
+      toggle.title = isBranchCollapsed ? "展开后续分支" : "收起后续分支";
+      toggle.setAttribute("aria-label", isBranchCollapsed ? "展开后续分支" : "收起后续分支");
+      toggle.setAttribute("aria-expanded", String(!isBranchCollapsed));
+      toggle.addEventListener("mousedown", (event) => event.stopPropagation());
+      toggle.addEventListener("dblclick", (event) => event.stopPropagation());
+      toggle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleBranch(node.id);
+      });
+      count.insertAdjacentElement("afterend", toggle);
+    }
     card.addEventListener("mousedown", (event) => startNodeDrag(event, node, card));
     card.addEventListener("click", (event) => {
       if (state.suppressNextClick) {
@@ -682,6 +749,29 @@ function renderSelection() {
   });
 }
 
+function getVisibleChildren(node) {
+  if (!node || state.collapsedBranchIds.has(node.id)) return [];
+  return node.children || [];
+}
+
+function toggleBranch(nodeId) {
+  state.selectedId = nodeId;
+  clearNodeGroupSelection();
+  if (state.collapsedBranchIds.has(nodeId)) {
+    state.collapsedBranchIds.delete(nodeId);
+    setStatus("后续分支已展开。");
+  } else {
+    state.collapsedBranchIds.add(nodeId);
+    setStatus("后续分支已收起。");
+  }
+  render();
+}
+
+function resetBranchViewState() {
+  state.collapsedBranchIds.clear();
+  clearNodeGroupSelection();
+}
+
 async function handleAsk() {
   const question = els.promptInput.value.trim();
   if (!question) {
@@ -711,9 +801,11 @@ async function handleAsk() {
 
   if (answerParent) {
     answerParent.children.push(answerNode);
+    state.collapsedBranchIds.delete(answerParent.id);
   } else {
     questionNode.children.push(answerNode);
     parent.children.push(questionNode);
+    state.collapsedBranchIds.delete(parent.id);
   }
   state.selectedId = answerNode.id;
   els.promptInput.value = "";
@@ -896,6 +988,7 @@ function seedExample() {
   };
   state.selectedId = state.tree.children[0].children[0].id;
   state.hasPositionedViewport = false;
+  resetBranchViewState();
   persist();
   render();
   setStatus("示例树已载入，可以点击任意回答继续发散。");
@@ -921,14 +1014,360 @@ function branch(question, answer, children = []) {
 }
 
 function exportTree() {
-  const blob = new Blob([JSON.stringify(state.tree, null, 2)], { type: "application/json" });
+  downloadTextFile(JSON.stringify(state.tree, null, 2), `forkscape-${todayStamp()}.json`, "application/json");
+  setStatus("对话树 JSON 已导出。");
+}
+
+function exportMarkdown() {
+  const session = state.sessions.find((item) => item.id === state.activeSessionId);
+  const title = session?.title || titleFromTree(state.tree) || "Forkscape 对话脑图";
+  const markdown = treeToMarkdown(state.tree, title);
+  downloadTextFile(markdown, `${toFileSlug(title)}-${todayStamp()}.md`, "text/markdown;charset=utf-8");
+  setStatus("对话树 Markdown 已导出。");
+}
+
+async function exportPng() {
+  const entries = state.positioned || [];
+  if (!entries.length) {
+    setStatus("没有可导出的对话框。");
+    return;
+  }
+  if (document.fonts?.ready) await document.fonts.ready;
+
+  const session = state.sessions.find((item) => item.id === state.activeSessionId);
+  const title = session?.title || titleFromTree(state.tree) || "Forkscape 对话脑图";
+  const canvas = renderTreeToCanvas(entries);
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      setStatus("PNG 导出失败。");
+      return;
+    }
+    downloadBlob(blob, `${toFileSlug(title)}-${todayStamp()}.png`);
+    setStatus("对话树 PNG 已导出。");
+  }, "image/png");
+}
+
+function exportSvg() {
+  const entries = state.positioned || [];
+  if (!entries.length) {
+    setStatus("没有可导出的对话框。");
+    return;
+  }
+  const session = state.sessions.find((item) => item.id === state.activeSessionId);
+  const title = session?.title || titleFromTree(state.tree) || "Forkscape 对话脑图";
+  const svg = renderTreeToSvg(entries, title);
+  downloadTextFile(svg, `${toFileSlug(title)}-${todayStamp()}.svg`, "image/svg+xml;charset=utf-8");
+  setStatus("对话树 SVG 已导出。");
+}
+
+function renderTreeToCanvas(entries) {
+  const nodeWidth = 252;
+  const padding = 180;
+  const minX = Math.min(...entries.map((entry) => entry.x));
+  const minY = Math.min(...entries.map((entry) => entry.y));
+  const maxX = Math.max(...entries.map((entry) => entry.x + nodeWidth));
+  const maxY = Math.max(...entries.map((entry) => entry.y + entry.height));
+  const width = Math.ceil(maxX - minX + padding * 2);
+  const height = Math.ceil(maxY - minY + padding * 2);
+  const scale = Math.min(2, 3200 / Math.max(width, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(width * scale));
+  canvas.height = Math.max(1, Math.ceil(height * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.scale(scale, scale);
+  ctx.translate(padding - minX, padding - minY);
+
+  drawPngBackground(ctx, minX - padding, minY - padding, width, height);
+  drawPngLinks(ctx, entries, nodeWidth);
+  entries.forEach((entry) => drawPngNode(ctx, entry, nodeWidth));
+  return canvas;
+}
+
+function getExportBounds(entries, nodeWidth = 252, padding = 180) {
+  const minX = Math.min(...entries.map((entry) => entry.x));
+  const minY = Math.min(...entries.map((entry) => entry.y));
+  const maxX = Math.max(...entries.map((entry) => entry.x + nodeWidth));
+  const maxY = Math.max(...entries.map((entry) => entry.y + entry.height));
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    padding,
+    width: Math.ceil(maxX - minX + padding * 2),
+    height: Math.ceil(maxY - minY + padding * 2),
+    offsetX: padding - minX,
+    offsetY: padding - minY,
+  };
+}
+
+function renderTreeToSvg(entries, title) {
+  const nodeWidth = 252;
+  const bounds = getExportBounds(entries, nodeWidth, 180);
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${bounds.width}" height="${bounds.height}" viewBox="0 0 ${bounds.width} ${bounds.height}" role="img" aria-label="${escapeXML(title)}">`,
+    "<defs>",
+    '<pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">',
+    '<path d="M 44 0 L 0 0 0 44" fill="none" stroke="rgba(23,92,136,.10)" stroke-width="1"/>',
+    "</pattern>",
+    '<filter id="cardShadow" x="-10%" y="-10%" width="130%" height="130%">',
+    '<feDropShadow dx="9" dy="9" stdDeviation="0" flood-color="rgba(23,23,23,.12)"/>',
+    "</filter>",
+    "</defs>",
+    `<rect width="${bounds.width}" height="${bounds.height}" fill="#f4eddf"/>`,
+    `<rect width="${bounds.width}" height="${bounds.height}" fill="url(#grid)"/>`,
+    '<g font-family="Microsoft YaHei, PingFang SC, Arial, sans-serif">',
+  ];
+  parts.push(svgLinks(entries, bounds, nodeWidth));
+  entries.forEach((entry) => parts.push(svgNode(entry, bounds, nodeWidth)));
+  parts.push("</g>", "</svg>");
+  return parts.join("\n");
+}
+
+function svgLinks(entries, bounds, nodeWidth) {
+  const byId = new Map(entries.map((entry) => [entry.node.id, entry]));
+  return entries.map((entry) => {
+    if (!entry.parentId) return "";
+    const parent = byId.get(entry.parentId);
+    if (!parent) return "";
+    const startX = parent.x + nodeWidth + bounds.offsetX;
+    const startY = parent.y + parent.height / 2 + bounds.offsetY;
+    const endX = entry.x + bounds.offsetX;
+    const endY = entry.y + entry.height / 2 + bounds.offsetY;
+    const mid = startX + (endX - startX) * 0.5;
+    return `<path d="M ${startX} ${startY} C ${mid} ${startY}, ${mid} ${endY}, ${endX} ${endY}" fill="none" stroke="rgba(78,69,54,.48)" stroke-width="2.5" stroke-linecap="round"/>`;
+  }).join("\n");
+}
+
+function svgNode(entry, bounds, nodeWidth) {
+  const { node, height } = entry;
+  const x = entry.x + bounds.offsetX;
+  const y = entry.y + bounds.offsetY;
+  const colors = {
+    root: { bg: "#171717", ink: "#fffaf0", meta: "#fffaf0" },
+    user: { bg: "#e8f1f4", ink: "#171717", meta: "#6f6557" },
+    model: { bg: "#fff8dc", ink: "#171717", meta: "#6f6557" },
+  };
+  const theme = colors[node.role] || colors.model;
+  const textLines = wrapSvgText(String(node.text || ""), 24).slice(0, Math.max(1, Math.floor((height - 68) / 21)));
+  const hasMore = wrapSvgText(String(node.text || ""), 24).length > textLines.length;
+  const text = textLines.map((line, index) => {
+    const value = index === textLines.length - 1 && hasMore ? `${line.slice(0, Math.max(0, line.length - 1))}…` : line;
+    return `<tspan x="${x + 15}" y="${y + 58 + index * 21}">${escapeXML(value)}</tspan>`;
+  }).join("");
+  return `
+<g filter="url(#cardShadow)">
+  <rect x="${x}" y="${y}" width="${nodeWidth}" height="${height}" rx="8" fill="${theme.bg}" stroke="#171717" stroke-width="1.5"/>
+  ${svgPill(roleLabel(node.role), x + 15, y + 14, theme.ink)}
+  ${svgPill(`${node.children.length} 分支`, x + nodeWidth - 72, y + 14, theme.meta)}
+  <text fill="${theme.ink}" font-size="14" dominant-baseline="text-before-edge">${text}</text>
+</g>`;
+}
+
+function svgPill(text, x, y, color) {
+  const width = Math.max(42, estimateSvgTextWidth(text, 11, 800) + 16);
+  return `
+  <rect x="${x}" y="${y}" width="${width}" height="22" rx="11" fill="transparent" stroke="${color}" stroke-width="1"/>
+  <text x="${x + 8}" y="${y + 14}" fill="${color}" font-size="11" font-weight="800">${escapeXML(text)}</text>`;
+}
+
+function wrapSvgText(text, maxWeight) {
+  const lines = [];
+  String(text || "").split("\n").forEach((paragraph) => {
+    let line = "";
+    let weight = 0;
+    [...paragraph].forEach((char) => {
+      const charWeight = char.charCodeAt(0) > 255 ? 1.75 : 1;
+      if (line && weight + charWeight > maxWeight) {
+        lines.push(line);
+        line = char;
+        weight = charWeight;
+      } else {
+        line += char;
+        weight += charWeight;
+      }
+    });
+    lines.push(line || " ");
+  });
+  return lines;
+}
+
+function estimateSvgTextWidth(text, fontSize, fontWeight = 400) {
+  const weightBoost = fontWeight >= 700 ? 0.66 : 0.58;
+  return [...String(text)].reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? fontSize : fontSize * weightBoost), 0);
+}
+
+function drawPngBackground(ctx, x, y, width, height) {
+  ctx.fillStyle = "#f4eddf";
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeStyle = "rgba(23, 92, 136, .10)";
+  ctx.lineWidth = 1;
+  const step = 44;
+  const startX = Math.floor(x / step) * step;
+  const startY = Math.floor(y / step) * step;
+  for (let gridX = startX; gridX <= x + width; gridX += step) {
+    ctx.beginPath();
+    ctx.moveTo(gridX, y);
+    ctx.lineTo(gridX, y + height);
+    ctx.stroke();
+  }
+  for (let gridY = startY; gridY <= y + height; gridY += step) {
+    ctx.beginPath();
+    ctx.moveTo(x, gridY);
+    ctx.lineTo(x + width, gridY);
+    ctx.stroke();
+  }
+}
+
+function drawPngLinks(ctx, entries, nodeWidth) {
+  const byId = new Map(entries.map((entry) => [entry.node.id, entry]));
+  ctx.strokeStyle = "rgba(78, 69, 54, .48)";
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = "round";
+  entries.forEach((entry) => {
+    if (!entry.parentId) return;
+    const parent = byId.get(entry.parentId);
+    if (!parent) return;
+    const startX = parent.x + nodeWidth;
+    const startY = parent.y + parent.height / 2;
+    const endX = entry.x;
+    const endY = entry.y + entry.height / 2;
+    const mid = startX + (endX - startX) * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.bezierCurveTo(mid, startY, mid, endY, endX, endY);
+    ctx.stroke();
+  });
+}
+
+function drawPngNode(ctx, entry, nodeWidth) {
+  const { node, x, y, height } = entry;
+  const colors = {
+    root: { bg: "#171717", ink: "#fffaf0", meta: "#fffaf0" },
+    user: { bg: "#e8f1f4", ink: "#171717", meta: "#6f6557" },
+    model: { bg: "#fff8dc", ink: "#171717", meta: "#6f6557" },
+  };
+  const theme = colors[node.role] || colors.model;
+  ctx.save();
+  ctx.shadowColor = "rgba(23, 23, 23, .12)";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 9;
+  ctx.shadowOffsetY = 9;
+  roundedRect(ctx, x, y, nodeWidth, height, 8);
+  ctx.fillStyle = theme.bg;
+  ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.strokeStyle = "#171717";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  drawPngPill(ctx, roleLabel(node.role), x + 15, y + 14, theme.ink);
+  drawPngPill(ctx, `${node.children.length} 分支`, x + nodeWidth - 72, y + 14, theme.meta);
+
+  ctx.fillStyle = theme.ink;
+  ctx.font = '14px "Microsoft YaHei", "PingFang SC", Arial, sans-serif';
+  ctx.textBaseline = "top";
+  const lines = wrapCanvasText(ctx, String(node.text || ""), nodeWidth - 30);
+  const maxLines = Math.max(1, Math.floor((height - 68) / 21));
+  lines.slice(0, maxLines).forEach((line, index) => {
+    ctx.fillText(index === maxLines - 1 && lines.length > maxLines ? `${line.slice(0, Math.max(0, line.length - 1))}…` : line, x + 15, y + 58 + index * 21);
+  });
+  ctx.restore();
+}
+
+function drawPngPill(ctx, text, x, y, color) {
+  ctx.save();
+  ctx.font = '800 11px "Microsoft YaHei", "PingFang SC", Arial, sans-serif';
+  const width = Math.max(42, ctx.measureText(text).width + 16);
+  roundedRect(ctx, x, y, width, 22, 11);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x + 8, y + 11);
+  ctx.restore();
+}
+
+function wrapCanvasText(ctx, text, maxWidth) {
+  const lines = [];
+  String(text || "").split("\n").forEach((paragraph) => {
+    let line = "";
+    [...paragraph].forEach((char) => {
+      const next = line + char;
+      if (line && ctx.measureText(next).width > maxWidth) {
+        lines.push(line);
+        line = char;
+      } else {
+        line = next;
+      }
+    });
+    lines.push(line || " ");
+  });
+  return lines;
+}
+
+function roundedRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function downloadTextFile(content, filename, type) {
+  const blob = new Blob([content], { type });
+  downloadBlob(blob, filename);
+}
+
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `gemini-branches-${new Date().toISOString().slice(0, 10)}.json`;
+  link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
-  setStatus("对话树 JSON 已导出。");
+}
+
+function treeToMarkdown(root, title) {
+  const lines = [
+    `# ${title}`,
+    "",
+    `导出时间：${new Date().toLocaleString()}`,
+    "",
+  ];
+  (root.children || []).forEach((child) => appendNodeMarkdown(child, 2, lines));
+  return `${lines.join("\n").trim()}\n`;
+}
+
+function appendNodeMarkdown(node, level, lines) {
+  const heading = "#".repeat(Math.min(level, 6));
+  lines.push(`${heading} ${roleLabel(node.role)}`);
+  lines.push("");
+  lines.push(String(node.text || "").trim() || "（空内容）");
+  lines.push("");
+  (node.children || []).forEach((child) => appendNodeMarkdown(child, level + 1, lines));
+}
+
+function todayStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function toFileSlug(value) {
+  const slug = String(value || "forkscape")
+    .trim()
+    .toLowerCase()
+    .replace(/[\\/:*?"<>|]+/g, "")
+    .replace(/\s+/g, "-")
+    .slice(0, 48);
+  return slug || "forkscape";
 }
 
 function importTree(event) {
@@ -943,6 +1382,7 @@ function importTree(event) {
       shiftLegacyNodePositions(state.tree);
       state.selectedId = imported.id;
       state.hasPositionedViewport = false;
+      resetBranchViewState();
       persist();
       render();
       setStatus("对话树已导入。");
@@ -956,7 +1396,7 @@ function importTree(event) {
 }
 
 function setZoom(nextZoom) {
-  state.zoom = Math.min(1.6, Math.max(0.42, nextZoom));
+  state.zoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
   applyZoom();
 }
 
@@ -964,6 +1404,52 @@ function resetView() {
   state.zoom = 1;
   applyZoom();
   scrollToCanvasOrigin("smooth");
+}
+
+function showAllConversationCards() {
+  state.isPanning = false;
+  els.viewport.classList.remove("dragging");
+  state.collapsedBranchIds.clear();
+  clearNodeGroupSelection();
+  render();
+  requestAnimationFrame(() => fitPositionedNodesInView("smooth"));
+  setStatus("已显示所有对话框。");
+}
+
+function fitPositionedNodesInView(behavior = "smooth") {
+  const entries = state.positioned || [];
+  if (!entries.length) {
+    resetView();
+    return;
+  }
+  const padding = 120;
+  const minX = Math.min(...entries.map((entry) => entry.x));
+  const minY = Math.min(...entries.map((entry) => entry.y));
+  const maxX = Math.max(...entries.map((entry) => entry.x + 252));
+  const maxY = Math.max(...entries.map((entry) => entry.y + entry.height));
+  const contentWidth = Math.max(1, maxX - minX);
+  const contentHeight = Math.max(1, maxY - minY);
+  const targetWidth = contentWidth + padding * 2;
+  const targetHeight = contentHeight + padding * 2;
+  const nextZoom = clamp(
+    Math.min(
+      els.viewport.clientWidth / targetWidth,
+      els.viewport.clientHeight / targetHeight,
+    ),
+    OVERVIEW_MIN_ZOOM,
+    1.12,
+  );
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+
+  state.zoom = nextZoom;
+  applyZoom();
+  els.viewport.scrollTo({
+    left: Math.max(0, centerX * nextZoom - els.viewport.clientWidth / 2),
+    top: Math.max(0, centerY * nextZoom - els.viewport.clientHeight / 2),
+    behavior,
+  });
+  requestAnimationFrame(renderMinimapViewport);
 }
 
 function applyZoom() {
@@ -1002,8 +1488,13 @@ function jumpToMinimapPoint(event) {
 }
 
 function startPan(event) {
-  if (event.target.closest(".node-card")) return;
   if (event.target.closest(".canvas-minimap, .canvas-help")) return;
+  if (event.button === 1 && isMiddleDoublePress()) {
+    event.preventDefault();
+    showAllConversationCards();
+    return;
+  }
+  if (event.target.closest(".node-card")) return;
   if (event.button !== 0 && event.button !== 1) return;
   event.preventDefault();
   state.isPanning = true;
@@ -1014,6 +1505,13 @@ function startPan(event) {
   state.panStartLeft = els.viewport.scrollLeft;
   state.panStartTop = els.viewport.scrollTop;
   els.viewport.classList.add("dragging");
+}
+
+function isMiddleDoublePress() {
+  const now = Date.now();
+  const isDouble = now - state.lastMiddlePress < 360;
+  state.lastMiddlePress = now;
+  return isDouble;
 }
 
 function handlePointerMove(event) {
@@ -1128,7 +1626,7 @@ function handleWheelZoom(event) {
   event.preventDefault();
   const oldZoom = state.zoom;
   const direction = event.deltaY > 0 ? -1 : 1;
-  const nextZoom = Math.min(1.6, Math.max(0.42, oldZoom + direction * 0.08));
+  const nextZoom = clamp(oldZoom + direction * 0.08, MIN_ZOOM, MAX_ZOOM);
   if (nextZoom === oldZoom) return;
 
   const rect = els.viewport.getBoundingClientRect();
@@ -1367,6 +1865,16 @@ function escapeHTML(value) {
     ">": "&gt;",
     '"': "&quot;",
     "'": "&#039;",
+  }[char]));
+}
+
+function escapeXML(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&apos;",
   }[char]));
 }
 
